@@ -23,6 +23,69 @@ winremote-mcp
 
 That's it! Your Windows MCP server is now running on `http://127.0.0.1:8090` and ready to accept commands from MCP clients like Claude Desktop or OpenClaw.
 
+## What's New in v0.4.9
+
+### 🔒 HTTPS / TLS Support
+
+You can now run WinRemote MCP over HTTPS — required for remote access and for tools like Claude Desktop that need a secure connection.
+
+**Step 1 — Generate a self-signed certificate** (for local/LAN use):
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+```
+
+**Step 2 — Start the server with TLS:**
+```bash
+winremote serve --ssl-certfile cert.pem --ssl-keyfile key.pem --host 0.0.0.0 --port 8090
+```
+
+Or in `winremote.toml`:
+```toml
+[server]
+host         = "0.0.0.0"
+port         = 8090
+ssl_certfile = "C:/Users/you/cert.pem"
+ssl_keyfile  = "C:/Users/you/key.pem"
+```
+
+When active, the startup banner shows **`[https ON]`** and the server listens on `https://`.
+
+**Claude Desktop config** (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "winremote": {
+      "type": "http",
+      "url": "https://192.168.1.100:8090/mcp/",
+      "headers": { "Authorization": "Bearer YOUR_AUTH_KEY" }
+    }
+  }
+}
+```
+
+> **Tip:** For a trusted certificate (no browser warning), use [mkcert](https://github.com/FiloSottile/mkcert): `mkcert -install && mkcert 192.168.1.100`
+
+---
+
+### 🔑 OAuth 2.0 Support (closes #33)
+
+WinRemote now ships a built-in OAuth 2.0 Authorization Server, so clients like Claude Desktop can authenticate via OAuth instead of a static API key.
+
+```bash
+winremote serve --ssl-certfile cert.pem --ssl-keyfile key.pem \
+                --oauth-client-id my-client --oauth-client-secret my-secret
+```
+
+The server exposes the standard MCP OAuth endpoints:
+- `GET /.well-known/oauth-authorization-server`
+- `POST /oauth/register`
+- `GET /oauth/authorize`
+- `POST /oauth/token`
+
+Startup banner shows **`[oauth ON]`** when enabled. Existing `--auth-key` Bearer token auth still works unchanged.
+
+---
+
 ## What's New in v0.4.8
 
 - ✅ Added compatibility with **fastmcp 3.x** internal tool registry changes
