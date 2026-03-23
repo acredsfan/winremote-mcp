@@ -26,6 +26,8 @@ except ImportError:
 
 from PIL import ImageGrab
 
+_UI_WATCH_BASELINES: dict[str, list[dict]] = {}
+
 # Enable DPI awareness so screenshots capture native resolution (e.g. 4K)
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
@@ -214,10 +216,13 @@ def map_ui_elements(
             "index": 0,
             "type": "window",
             "class": "Window",
+            "handle": target_hwnd,
             "label": target_window.title,
             "rect": {"left": left, "top": top, "right": right, "bottom": bottom},
+            "relative_rect": {"left": 0, "top": 0, "right": right - left, "bottom": bottom - top},
             "size": {"width": right - left, "height": bottom - top},
             "center": {"x": (left + right) // 2, "y": (top + bottom) // 2},
+            "relative_center": {"x": (right - left) // 2, "y": (bottom - top) // 2},
         }
     ]
 
@@ -258,8 +263,15 @@ def map_ui_elements(
             "label": label,
             "window_text": text,
             "rect": {"left": r[0], "top": r[1], "right": r[2], "bottom": r[3]},
+            "relative_rect": {
+                "left": r[0] - left,
+                "top": r[1] - top,
+                "right": r[2] - left,
+                "bottom": r[3] - top,
+            },
             "size": {"width": w, "height": h},
             "center": {"x": (r[0] + r[2]) // 2, "y": (r[1] + r[3]) // 2},
+            "relative_center": {"x": ((r[0] + r[2]) // 2) - left, "y": ((r[1] + r[3]) // 2) - top},
         }
 
         if include_text:
@@ -283,6 +295,289 @@ def map_ui_elements(
         pass
 
     return results
+
+
+def _normalize_search_text(value: str | None) -> str:
+    """Normalize UI text for matching."""
+    if not value:
+        return ""
+    return re.sub(r"\s+", " ", str(value).strip().lower())
+
+
+def _element_search_fields(element: dict) -> dict[str, str]:
+    """Return searchable text fields for a mapped UI element."""
+    return {
+        "label": str(element.get("label") or ""),
+        "window_text": str(element.get("window_text") or ""),
+        "class": str(element.get("class") or ""),
+        "ocr_text": str(element.get("ocr_text") or ""),
+    }
+
+
+def find_ui_elements(
+    query: str,
+    window_title: str = "",
+    include_text: bool = False,
+    max_results: int = 5,
+    match_mode: str = "auto",
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> list[dict]:
+    """Find best matching UI elements for a text/class query.
+
+    Supported match modes: auto, exact, contains, fuzzy, regex.
+    """
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("query is required")
+
+    if match_mode not in {"auto", "exact", "contains", "fuzzy", "regex"}:
+        raise ValueError("match_mode must be one of: auto, exact, contains, fuzzy, regex")
+
+    mapped = map_ui_elements(
+        window_title=window_title,
+        include_text=include_text,
+        max_elements=max_elements,
+        min_width=min_width,
+        min_height=min_height,
+    )
+    elements = mapped[1:]
+    q_norm = _normalize_search_text(query)
+    q_tokens = set(q_norm.split())
+    try:
+        from thefuzz import fuzz
+    except Exception:
+        fuzz = None
+
+    pattern = None
+    if match_mode == "regex":
+        pattern = re.compile(query, re.IGNORECASE)
+
+    matches: list[dict] = []
+    for el in elements:
+        best_score = 0
+        best_type = ""
+        best_field = ""
+        best_value = ""
+        for field_name, raw_value in _element_search_fields(el).items():
+            value = _normalize_search_text(raw_value)
+            if not value:
+                continue
+
+            score = 0
+            match_type = ""
+            if match_mode == "regex":
+                if pattern and pattern.search(raw_value):
+                    score = 100
+                    match_type = "regex"
+            else:
+                allow_exact = match_mode in {"auto", "exact"}
+                allow_contains = match_mode in {"auto", "contains"}
+                allow_fuzzy = match_mode in {"auto", "fuzzy"}
+
+                if allow_exact and value == q_norm:
+                    score = 100
+                    match_type = "exact"
+                elif allow_contains and q_norm in value:
+                    score = 90
+                    match_type = "contains"
+                elif allow_contains and q_tokens:
+                    overlap = len(q_tokens & set(value.split()))
+                    if overlap:
+                        score = max(score, min(85, 60 + overlap * 10))
+                        match_type = match_type or "tokens"
+                if allow_fuzzy and fuzz is not None:
+                    fuzzy_score = int(fuzz.partial_ratio(q_norm, value))
+                    if fuzzy_score >= max(60, score):
+                        score = fuzzy_score
+                        match_type = "fuzzy"
+
+            if score > best_score:
+                best_score = score
+                best_type = match_type
+                best_field = field_name
+                best_value = raw_value
+
+        if best_score > 0:
+            item = dict(el)
+            item["match"] = {
+                "query": query,
+                "score": best_score,
+                "type": best_type,
+                "field": best_field,
+                "value": best_value,
+            }
+            matches.append(item)
+
+    matches.sort(key=lambda item: (-item["match"]["score"], item.get("index", 0)))
+    return matches[:max_results]
+
+
+def _watch_key(
+    window_title: str,
+    include_text: bool,
+    max_elements: int,
+    min_width: int,
+    min_height: int,
+) -> str:
+    """Build a stable cache key for UI watch baselines."""
+    return "|".join(
+        [
+            window_title.strip().lower() or "__foreground__",
+            "1" if include_text else "0",
+            str(max_elements),
+            str(min_width),
+            str(min_height),
+        ]
+    )
+
+
+def _watch_identity(element: dict) -> tuple[str, str]:
+    """Return a stable-ish identity for UI diffing."""
+    return (
+        _normalize_search_text(element.get("label") or element.get("window_text") or ""),
+        _normalize_search_text(element.get("class") or ""),
+    )
+
+
+def _with_occurrence_keys(elements: list[dict]) -> dict[tuple[str, str, int], dict]:
+    """Assign occurrence-based identities so duplicate labels/classes can be diffed."""
+    counters: dict[tuple[str, str], int] = {}
+    keyed: dict[tuple[str, str, int], dict] = {}
+    ordered = sorted(
+        elements,
+        key=lambda el: (
+            el.get("relative_center", {}).get("y", 0),
+            el.get("relative_center", {}).get("x", 0),
+            el.get("index", 0),
+        ),
+    )
+    for el in ordered:
+        ident = _watch_identity(el)
+        occurrence = counters.get(ident, 0)
+        counters[ident] = occurrence + 1
+        keyed[(ident[0], ident[1], occurrence)] = el
+    return keyed
+
+
+def diff_ui_maps(previous: list[dict], current: list[dict]) -> dict:
+    """Diff two UI maps and report added/removed/moved/text-changed controls."""
+    prev_controls = previous[1:] if previous else []
+    curr_controls = current[1:] if current else []
+    prev_keyed = _with_occurrence_keys(prev_controls)
+    curr_keyed = _with_occurrence_keys(curr_controls)
+
+    prev_keys = set(prev_keyed)
+    curr_keys = set(curr_keyed)
+
+    added = [curr_keyed[key] for key in sorted(curr_keys - prev_keys)]
+    removed = [prev_keyed[key] for key in sorted(prev_keys - curr_keys)]
+    moved: list[dict] = []
+    text_changed: list[dict] = []
+
+    for key in sorted(prev_keys & curr_keys):
+        prev_el = prev_keyed[key]
+        curr_el = curr_keyed[key]
+        prev_rel_center = prev_el.get("relative_center") or prev_el.get("center") or {"x": 0, "y": 0}
+        curr_rel_center = curr_el.get("relative_center") or curr_el.get("center") or {"x": 0, "y": 0}
+        prev_rel_rect = prev_el.get("relative_rect") or prev_el.get("rect") or {}
+        curr_rel_rect = curr_el.get("relative_rect") or curr_el.get("rect") or {}
+
+        if prev_rel_center != curr_rel_center or prev_rel_rect != curr_rel_rect:
+            moved.append(
+                {
+                    "label": curr_el.get("label") or curr_el.get("class") or "",
+                    "class": curr_el.get("class") or "",
+                    "from": {
+                        "center": prev_el.get("center"),
+                        "relative_center": prev_el.get("relative_center"),
+                        "rect": prev_el.get("rect"),
+                        "relative_rect": prev_el.get("relative_rect"),
+                    },
+                    "to": {
+                        "center": curr_el.get("center"),
+                        "relative_center": curr_el.get("relative_center"),
+                        "rect": curr_el.get("rect"),
+                        "relative_rect": curr_el.get("relative_rect"),
+                    },
+                }
+            )
+
+        prev_text = {
+            "window_text": prev_el.get("window_text") or "",
+            "ocr_text": prev_el.get("ocr_text") or "",
+        }
+        curr_text = {
+            "window_text": curr_el.get("window_text") or "",
+            "ocr_text": curr_el.get("ocr_text") or "",
+        }
+        if prev_text != curr_text:
+            text_changed.append(
+                {
+                    "label": curr_el.get("label") or curr_el.get("class") or "",
+                    "class": curr_el.get("class") or "",
+                    "from": prev_text,
+                    "to": curr_text,
+                }
+            )
+
+    return {
+        "added": added,
+        "removed": removed,
+        "moved": moved,
+        "text_changed": text_changed,
+        "summary": {
+            "added": len(added),
+            "removed": len(removed),
+            "moved": len(moved),
+            "text_changed": len(text_changed),
+        },
+    }
+
+
+def watch_ui_elements(
+    window_title: str = "",
+    include_text: bool = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    reset: bool = False,
+    update_baseline: bool = True,
+) -> dict:
+    """Capture and diff UI state against a cached baseline for a window."""
+    current = map_ui_elements(
+        window_title=window_title,
+        include_text=include_text,
+        max_elements=max_elements,
+        min_width=min_width,
+        min_height=min_height,
+    )
+    key = _watch_key(window_title, include_text, max_elements, min_width, min_height)
+    previous = None if reset else _UI_WATCH_BASELINES.get(key)
+
+    if reset or previous is None:
+        _UI_WATCH_BASELINES[key] = current
+        return {
+            "window_title": window_title or None,
+            "baseline_created": True,
+            "baseline_reset": bool(reset),
+            "previous_count": 0 if previous is None else max(0, len(previous) - 1),
+            "current_count": max(0, len(current) - 1),
+            "diff": {"added": [], "removed": [], "moved": [], "text_changed": [], "summary": {"added": 0, "removed": 0, "moved": 0, "text_changed": 0}},
+        }
+
+    diff = diff_ui_maps(previous, current)
+    if update_baseline:
+        _UI_WATCH_BASELINES[key] = current
+    return {
+        "window_title": window_title or None,
+        "baseline_created": False,
+        "baseline_reset": False,
+        "previous_count": max(0, len(previous) - 1),
+        "current_count": max(0, len(current) - 1),
+        "diff": diff,
+    }
 
 
 # ---------------------------------------------------------------------------

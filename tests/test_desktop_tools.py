@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pyautogui
@@ -18,6 +19,13 @@ def _call_tool(tool_name, **kwargs):
 
     tool = _get_registered_tools()[tool_name]
     return tool.fn(**kwargs)
+
+
+def _parse_task_wrapped_json(result: str):
+    """Strip task wrapper prefix and parse JSON payload."""
+    if result.startswith("[task:"):
+        _, _, result = result.partition("] ")
+    return json.loads(result)
 
 
 class TestClick:
@@ -268,3 +276,117 @@ class TestUIMap:
             assert "Target window: Roblox Studio" in result
             assert "Inventory" in result
             assert "center=(100,180)" in result
+
+
+class TestUIMapJson:
+    def test_successful_map_json(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.map_ui_elements.return_value = [
+                {
+                    "index": 0,
+                    "label": "Roblox Studio",
+                    "rect": {"left": 10, "top": 20, "right": 510, "bottom": 420},
+                },
+                {
+                    "index": 1,
+                    "label": "Inventory",
+                    "class": "Button",
+                    "center": {"x": 100, "y": 180},
+                    "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                },
+            ]
+            result = _call_tool("UIMapJson", window_title="Roblox")
+            payload = _parse_task_wrapped_json(result)
+            assert payload["window"]["label"] == "Roblox Studio"
+            assert payload["count"] == 1
+            assert payload["controls"][0]["label"] == "Inventory"
+
+
+class TestUIFind:
+    def test_returns_structured_matches(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.find_ui_elements.return_value = [
+                {
+                    "index": 1,
+                    "label": "Inventory",
+                    "class": "Button",
+                    "center": {"x": 100, "y": 180},
+                    "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                    "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
+                }
+            ]
+            result = _call_tool("UIFind", query="Inventory")
+            payload = _parse_task_wrapped_json(result)
+            assert payload["query"] == "Inventory"
+            assert payload["count"] == 1
+            assert payload["matches"][0]["match"]["score"] == 100
+
+
+class TestUIClick:
+    def test_clicks_best_match(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.find_ui_elements.return_value = [
+                {
+                    "index": 1,
+                    "label": "Inventory",
+                    "class": "Button",
+                    "center": {"x": 100, "y": 180},
+                    "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                    "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
+                }
+            ]
+            result = _call_tool("UIClick", query="Inventory")
+            pyautogui.click.assert_called_with(100, 180, button="left")
+            assert "Inventory" in result
+            assert "(100,180)" in result
+
+    def test_no_match(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.find_ui_elements.return_value = []
+            result = _call_tool("UIClick", query="Missing")
+            assert "No UI element matched 'Missing'" in result
+
+
+class TestUIWatch:
+    def test_baseline_created(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.watch_ui_elements.return_value = {
+                "window_title": "Roblox Studio",
+                "baseline_created": True,
+                "baseline_reset": False,
+                "previous_count": 0,
+                "current_count": 3,
+                "diff": {"added": [], "removed": [], "moved": [], "text_changed": [], "summary": {"added": 0, "removed": 0, "moved": 0, "text_changed": 0}},
+            }
+            result = _call_tool("UIWatch", window_title="Roblox Studio")
+            payload = _parse_task_wrapped_json(result)
+            assert payload["baseline_created"] is True
+            assert payload["current_count"] == 3
+
+    def test_diff_reported(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.watch_ui_elements.return_value = {
+                "window_title": "Roblox Studio",
+                "baseline_created": False,
+                "baseline_reset": False,
+                "previous_count": 3,
+                "current_count": 4,
+                "diff": {
+                    "added": [{"label": "Recent", "class": "Button"}],
+                    "removed": [],
+                    "moved": [{"label": "Inventory", "class": "Button"}],
+                    "text_changed": [],
+                    "summary": {"added": 1, "removed": 0, "moved": 1, "text_changed": 0},
+                },
+            }
+            result = _call_tool("UIWatch", window_title="Roblox Studio")
+            payload = _parse_task_wrapped_json(result)
+            assert payload["baseline_created"] is False
+            assert payload["diff"]["summary"]["added"] == 1
+            assert payload["diff"]["summary"]["moved"] == 1

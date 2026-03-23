@@ -6,6 +6,10 @@ TOOL_TIERS = {
     "tier1": {
         "Snapshot",
         "AnnotatedSnapshot",
+        "UIMap",
+        "UIMapJson",
+        "UIFind",
+        "UIWatch",
         "GetClipboard",
         "GetSystemInfo",
         "ListProcesses",
@@ -27,6 +31,7 @@ TOOL_TIERS = {
     },
     "tier2": {
         "Click",
+        "UIClick",
         "Type",
         "Move",
         "Scroll",

@@ -173,6 +173,10 @@ Create/edit `.cursor/mcp.json` in your project:
 # UI coordinate mapping for buttons/panels
 "Map all UI element coordinates for the current foreground window"
 "Map Roblox Studio UI coordinates and include OCR text"
+"Return Roblox Studio UI coordinates as JSON"
+"Find the Inventory button in Roblox Studio"
+"Click the Inventory button in Roblox Studio"
+"Watch Roblox Studio UI for changes since the last snapshot"
 
 # Multi-monitor support  
 "Take a screenshot of monitor 2"

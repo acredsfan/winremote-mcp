@@ -391,6 +391,10 @@ See [SECURITY.md](SECURITY.md) for the full security guide.
 | Snapshot | Screenshot (JPEG, configurable quality/max_width) + window list + UI elements |
 | AnnotatedSnapshot | Screenshot with numbered labels on interactive elements |
 | UIMap | Map window/panel/button coordinates (x,y and bounding boxes), optional OCR per element |
+| UIMapJson | Structured JSON version of UIMap for automation-friendly coordinate extraction |
+| UIFind | Find UI elements by label/class/OCR text and return ranked matches |
+| UIClick | Click a UI element by semantic query instead of raw coordinates |
+| UIWatch | Diff UI layouts between snapshots to detect added, removed, moved, or changed controls |
 | OCR | Extract text from screen via OCR (pytesseract or Windows built-in) |
 | ScreenRecord | Record screen activity as animated GIF |
 | **Input** | |

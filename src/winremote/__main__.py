@@ -1501,6 +1501,198 @@ def UIMap(
         return f"UIMap error: {e}"
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UIMapJson",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def UIMapJson(
+    window_title: str = "",
+    include_text: bool | str = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> str:
+    """Map visible UI controls and return structured JSON.
+
+    Useful for programmatic UI automation flows that need exact coordinates.
+    """
+    err = _check_win32("UIMapJson")
+    if err:
+        return err
+    try:
+        import json
+
+        mapped = desktop.map_ui_elements(
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+        )
+        payload = {
+            "window": mapped[0] if mapped else None,
+            "controls": mapped[1:] if len(mapped) > 1 else [],
+            "count": max(0, len(mapped) - 1),
+            "include_text": _tobool(include_text),
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"UIMapJson error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UIFind",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def UIFind(
+    query: str,
+    window_title: str = "",
+    include_text: bool | str = False,
+    max_results: int = 5,
+    match_mode: str = "auto",
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> str:
+    """Find matching UI elements by label, class, window text, or OCR text.
+
+    Returns structured JSON sorted by best match first.
+    """
+    err = _check_win32("UIFind")
+    if err:
+        return err
+    try:
+        import json
+
+        matches = desktop.find_ui_elements(
+            query=query,
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            max_results=max_results,
+            match_mode=match_mode,
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+        )
+        payload = {
+            "query": query,
+            "window_title": window_title or None,
+            "match_mode": match_mode,
+            "count": len(matches),
+            "matches": matches,
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"UIFind error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UIClick",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def UIClick(
+    query: str,
+    window_title: str = "",
+    include_text: bool | str = False,
+    match_mode: str = "auto",
+    button: str = "left",
+    action: str = "click",
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> str:
+    """Find the best-matching UI element and click it by center coordinates.
+
+    Args mirror UIFind plus click action options.
+    """
+    err = _check_win32("UIClick")
+    if err:
+        return err
+    try:
+        matches = desktop.find_ui_elements(
+            query=query,
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            max_results=1,
+            match_mode=match_mode,
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+        )
+        if not matches:
+            return f"No UI element matched '{query}'"
+
+        target = matches[0]
+        center = target["center"]
+        x = center["x"]
+        y = center["y"]
+        if action == "hover":
+            pyautogui.moveTo(x, y)
+            verb = "Hovered"
+        elif action == "double":
+            pyautogui.doubleClick(x, y, button=button)
+            verb = f"Double-clicked {button}"
+        else:
+            pyautogui.click(x, y, button=button)
+            verb = f"Clicked {button}"
+
+        label = target.get("label") or target.get("class") or "(unnamed element)"
+        score = target.get("match", {}).get("score", "?")
+        return f"{verb} '{label}' at ({x},{y}) using query '{query}' (score={score})"
+    except Exception as e:
+        return f"UIClick error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UIWatch",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def UIWatch(
+    window_title: str = "",
+    include_text: bool | str = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    reset: bool | str = False,
+    update_baseline: bool | str = True,
+) -> str:
+    """Diff the current UI map against the previous snapshot for the same window.
+
+    First call (or reset=True) stores a baseline. Later calls report added,
+    removed, moved, and text-changed controls.
+    """
+    err = _check_win32("UIWatch")
+    if err:
+        return err
+    try:
+        import json
+
+        payload = desktop.watch_ui_elements(
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            reset=_tobool(reset),
+            update_baseline=_tobool(update_baseline),
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"UIWatch error: {e}"
+
+
 # ================================ Task Management ================================
 
 
