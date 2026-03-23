@@ -6,7 +6,7 @@ import base64
 import io
 import time
 
-from PIL import ImageGrab
+from winremote import desktop
 
 
 def record_screen(
@@ -36,7 +36,7 @@ def record_screen(
 
     bbox = None
     if left is not None and top is not None and right is not None and bottom is not None:
-        bbox = (left, top, right, bottom)
+        bbox = desktop.normalize_region(left, top, right, bottom)
 
     frames = []
     start = time.monotonic()
@@ -46,7 +46,10 @@ def record_screen(
         if now < target_time:
             time.sleep(target_time - now)
 
-        img = ImageGrab.grab(bbox=bbox)
+        if bbox is not None:
+            img, _metadata = desktop.capture_image(left=bbox[0], top=bbox[1], right=bbox[2], bottom=bbox[3])
+        else:
+            img, _metadata = desktop.capture_image()
         # Resize if needed
         if img.width > max_width:
             ratio = max_width / img.width

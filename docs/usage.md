@@ -178,9 +178,20 @@ Create/edit `.cursor/mcp.json` in your project:
 "Click the Inventory button in Roblox Studio"
 "Watch Roblox Studio UI for changes since the last snapshot"
 
+# Multi-monitor / virtual-screen aware examples
+"Extract text from the region 1920,0 to 3840,1080 on monitor 2"
+"Record the virtual-screen region from -1600,0 to 0,900"
+
 # Multi-monitor support  
 "Take a screenshot of monitor 2"
 ```
+
+### Structured UI JSON notes
+
+- `center` / `rect` use **absolute virtual-screen coordinates** across all monitors.
+- `relative_center` / `relative_rect` are **window-relative** and stay stable when a window moves.
+- `monitors` and `virtual_screen` help validate coordinates before clicking or capturing.
+- `monitor_id`, `element_id`, `parent_handle`, `pid`, and `process_name` make UI automation and diffing more reliable.
 
 ## Auto-Start Configuration
 

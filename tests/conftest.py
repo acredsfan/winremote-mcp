@@ -9,6 +9,8 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+from PIL import Image
+
 # ---------------------------------------------------------------------------
 # Must happen before ANY winremote import
 # ---------------------------------------------------------------------------
@@ -73,3 +75,25 @@ def _reset_pyautogui(monkeypatch):
     monkeypatch.setattr(pyautogui, "typewrite", MagicMock())
     monkeypatch.setattr(pyautogui, "write", MagicMock())
     monkeypatch.setattr(pyautogui, "position", MagicMock(return_value=(500, 500)))
+
+    import winremote.desktop as desktop
+
+    monitor_info = [
+        {
+            "monitor_id": 1,
+            "primary": True,
+            "rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+            "work_rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1040},
+            "size": {"width": 1920, "height": 1080},
+            "dpi": {"x": 96, "y": 96},
+            "scale": 1.0,
+            "dpi_fallback": True,
+        }
+    ]
+    virtual_screen = {"left": 0, "top": 0, "right": 1920, "bottom": 1080, "width": 1920, "height": 1080}
+    dummy_image = Image.new("RGB", (1920, 1080), "black")
+
+    monkeypatch.setattr(desktop, "get_monitor_info", MagicMock(return_value=monitor_info))
+    monkeypatch.setattr(desktop, "get_virtual_screen_bounds", MagicMock(return_value=virtual_screen))
+    monkeypatch.setattr(desktop, "validate_screen_point", MagicMock(return_value=monitor_info[0]))
+    monkeypatch.setattr(desktop, "capture_image", MagicMock(return_value=(dummy_image, {"bounds": virtual_screen, "captured_monitors": [1], "monitors": monitor_info, "virtual_screen": virtual_screen})))

@@ -6,6 +6,7 @@ import json
 from unittest.mock import patch
 
 import pyautogui
+from winremote import desktop
 
 # The MCP tools are wrapped by task_manager; access the original functions
 # via the module-level function objects before they're decorated, or call .fn
@@ -26,6 +27,22 @@ def _parse_task_wrapped_json(result: str):
     if result.startswith("[task:"):
         _, _, result = result.partition("] ")
     return json.loads(result)
+
+
+def _mock_monitor_context(mock_desktop):
+    monitor_info = [
+        {
+            "monitor_id": 1,
+            "primary": True,
+            "rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
+            "size": {"width": 1920, "height": 1080},
+            "scale": 1.0,
+        }
+    ]
+    virtual_screen = {"left": 0, "top": 0, "right": 1920, "bottom": 1080, "width": 1920, "height": 1080}
+    mock_desktop.get_monitor_info.return_value = monitor_info
+    mock_desktop.get_virtual_screen_bounds.return_value = virtual_screen
+    mock_desktop.validate_screen_point.return_value = monitor_info[0]
 
 
 class TestClick:
@@ -50,6 +67,11 @@ class TestClick:
         result = _call_tool("Click", x=0, y=0)
         assert "error" in result.lower()
         pyautogui.click.side_effect = None
+
+    def test_click_out_of_bounds(self):
+        with patch("winremote.__main__.desktop.validate_screen_point", side_effect=ValueError("outside the virtual screen bounds")):
+            result = _call_tool("Click", x=99999, y=99999)
+            assert "outside the virtual screen bounds" in result
 
 
 class TestType:
@@ -195,6 +217,7 @@ class TestSnapshotAutoReconnect:
     def test_snapshot_screenshot_fails_then_succeeds_after_reconnect(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             # First call fails, second succeeds
+            _mock_monitor_context(mock_desktop)
             mock_desktop.take_screenshot.side_effect = [Exception("screen grab failed"), "base64data"]
             mock_desktop.enumerate_windows.return_value = []
             mock_desktop.get_interactive_elements.return_value = []
@@ -216,6 +239,7 @@ class TestSnapshotAutoReconnect:
     def test_snapshot_non_screen_error_not_retried(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             # Non-screen-related error should not trigger reconnect
+            _mock_monitor_context(mock_desktop)
             mock_desktop.take_screenshot.side_effect = Exception("some other error")
 
             result = _call_tool("Snapshot")
@@ -227,6 +251,7 @@ class TestSnapshotAutoReconnect:
 
     def test_snapshot_reconnect_fails(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
+            _mock_monitor_context(mock_desktop)
             mock_desktop.take_screenshot.side_effect = Exception("screen grab failed")
 
             with patch("winremote.__main__._ensure_session_connected") as mock_ensure:
@@ -250,6 +275,7 @@ class TestUIMap:
     def test_empty_map(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
             mock_desktop.map_ui_elements.return_value = []
             result = _call_tool("UIMap")
             assert "No UI elements detected" in result
@@ -257,16 +283,22 @@ class TestUIMap:
     def test_successful_map(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
             mock_desktop.map_ui_elements.return_value = [
                 {
                     "index": 0,
                     "label": "Roblox Studio",
+                    "monitor_id": 1,
+                    "process_name": "RobloxStudioBeta.exe",
+                    "pid": 1234,
                     "rect": {"left": 10, "top": 20, "right": 510, "bottom": 420},
                 },
                 {
                     "index": 1,
                     "label": "Inventory",
+                    "element_id": "abc123",
                     "class": "Button",
+                    "monitor_id": 1,
                     "center": {"x": 100, "y": 180},
                     "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
                     "ocr_text": "Inventory",
@@ -282,23 +314,32 @@ class TestUIMapJson:
     def test_successful_map_json(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.summarize_ui_map.return_value = {"control_count": 1, "notes": []}
             mock_desktop.map_ui_elements.return_value = [
                 {
                     "index": 0,
                     "label": "Roblox Studio",
+                    "monitor_id": 1,
                     "rect": {"left": 10, "top": 20, "right": 510, "bottom": 420},
                 },
                 {
                     "index": 1,
                     "label": "Inventory",
+                    "element_id": "abc123",
                     "class": "Button",
+                    "monitor_id": 1,
                     "center": {"x": 100, "y": 180},
                     "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
                 },
             ]
             result = _call_tool("UIMapJson", window_title="Roblox")
             payload = _parse_task_wrapped_json(result)
+            assert payload["requested_window_title"] == "Roblox"
             assert payload["window"]["label"] == "Roblox Studio"
+            assert payload["monitors"][0]["monitor_id"] == 1
+            assert "coordinate_spaces" in payload
+            assert payload["summary"]["control_count"] == 1
             assert payload["count"] == 1
             assert payload["controls"][0]["label"] == "Inventory"
 
@@ -307,20 +348,31 @@ class TestUIFind:
     def test_returns_structured_matches(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
-            mock_desktop.find_ui_elements.return_value = [
-                {
-                    "index": 1,
-                    "label": "Inventory",
-                    "class": "Button",
-                    "center": {"x": 100, "y": 180},
-                    "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
-                    "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
-                }
-            ]
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "matches": [
+                    {
+                        "index": 1,
+                        "label": "Inventory",
+                        "class": "Button",
+                        "monitor_id": 1,
+                        "center": {"x": 100, "y": 180},
+                        "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                        "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory", "confidence": "high", "reason": "exact on label"},
+                    }
+                ],
+                "searched_element_count": 2,
+                "searchable_preview": [{"index": 1, "label": "Inventory", "class": "Button"}],
+                "summary": {"control_count": 1, "notes": []},
+                "recommendations": [],
+            }
             result = _call_tool("UIFind", query="Inventory")
             payload = _parse_task_wrapped_json(result)
             assert payload["query"] == "Inventory"
             assert payload["count"] == 1
+            assert payload["searched_element_count"] == 2
+            assert payload["monitors"][0]["monitor_id"] == 1
+            assert payload["summary"]["control_count"] == 1
             assert payload["matches"][0]["match"]["score"] == 100
 
 
@@ -328,16 +380,22 @@ class TestUIClick:
     def test_clicks_best_match(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
-            mock_desktop.find_ui_elements.return_value = [
-                {
-                    "index": 1,
-                    "label": "Inventory",
-                    "class": "Button",
-                    "center": {"x": 100, "y": 180},
-                    "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
-                    "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
-                }
-            ]
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "matches": [
+                    {
+                        "index": 1,
+                        "label": "Inventory",
+                        "element_id": "abc123",
+                        "class": "Button",
+                        "monitor_id": 1,
+                        "center": {"x": 100, "y": 180},
+                        "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                        "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
+                    }
+                ],
+                "recommendations": [],
+            }
             result = _call_tool("UIClick", query="Inventory")
             pyautogui.click.assert_called_with(100, 180, button="left")
             assert "Inventory" in result
@@ -346,15 +404,55 @@ class TestUIClick:
     def test_no_match(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
-            mock_desktop.find_ui_elements.return_value = []
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "matches": [],
+                "recommendations": ["Try a broader query or inspect summary.searchable_preview."],
+            }
             result = _call_tool("UIClick", query="Missing")
             assert "No UI element matched 'Missing'" in result
+
+
+class TestDesktopFindUIElementsWithContext:
+    def test_window_title_can_match_window(self):
+        mapped = [
+            {
+                "index": 0,
+                "type": "window",
+                "label": "Windows PowerShell",
+                "window_text": "Windows PowerShell",
+                "class": "Window",
+                "monitor_id": 1,
+                "center": {"x": 960, "y": 576},
+                "relative_center": {"x": 960, "y": 576},
+                "element_id": "window-1",
+            },
+            {
+                "index": 1,
+                "type": "control",
+                "label": "DesktopWindowXamlSource",
+                "window_text": "DesktopWindowXamlSource",
+                "class": "Windows.UI.Composition.DesktopWindowContentBridge",
+                "monitor_id": 1,
+                "center": {"x": 960, "y": 575},
+                "relative_center": {"x": 960, "y": 575},
+                "element_id": "control-1",
+            },
+        ]
+        with patch("winremote.desktop.map_ui_elements", return_value=mapped):
+            result = desktop.find_ui_elements_with_context(query="Windows PowerShell", window_title="Windows PowerShell")
+
+        assert result["matches"]
+        assert result["matches"][0]["type"] == "window"
+        assert result["matches"][0]["match"]["type"] == "exact"
+        assert result["summary"]["control_count"] == 1
 
 
 class TestUIWatch:
     def test_baseline_created(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
             mock_desktop.watch_ui_elements.return_value = {
                 "window_title": "Roblox Studio",
                 "baseline_created": True,
@@ -366,11 +464,13 @@ class TestUIWatch:
             result = _call_tool("UIWatch", window_title="Roblox Studio")
             payload = _parse_task_wrapped_json(result)
             assert payload["baseline_created"] is True
+            assert payload["monitors"][0]["monitor_id"] == 1
             assert payload["current_count"] == 3
 
     def test_diff_reported(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
             mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
             mock_desktop.watch_ui_elements.return_value = {
                 "window_title": "Roblox Studio",
                 "baseline_created": False,

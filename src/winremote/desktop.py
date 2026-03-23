@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
 import io
 import locale
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import pyautogui
 
@@ -57,6 +58,204 @@ def _get_system_language() -> str:
         return "en_US"
 
 
+def _safe_process_name(pid: int) -> str:
+    """Best-effort process name lookup."""
+    if not pid:
+        return ""
+    try:
+        import psutil
+
+        return psutil.Process(pid).name()
+    except Exception:
+        return ""
+
+
+def _get_monitor_dpi_scale(monitor_handle: int) -> tuple[int, int, float, bool]:
+    """Return DPI metadata for a monitor handle."""
+    try:
+        dpi_x = ctypes.c_uint()
+        dpi_y = ctypes.c_uint()
+        result = ctypes.windll.shcore.GetDpiForMonitor(
+            int(monitor_handle),
+            0,
+            ctypes.byref(dpi_x),
+            ctypes.byref(dpi_y),
+        )
+        if result == 0:
+            scale = round(dpi_x.value / 96.0, 4) if dpi_x.value else 1.0
+            return dpi_x.value, dpi_y.value, scale, False
+    except Exception:
+        pass
+    return 96, 96, 1.0, True
+
+
+def get_monitor_info() -> list[dict]:
+    """Return monitor metadata in virtual-screen coordinates."""
+    if not HAS_WIN32:
+        raise RuntimeError("pywin32 not installed — run `pip install pywin32`")
+
+    monitors = []
+    try:
+        enum = list(win32api.EnumDisplayMonitors())
+    except Exception as e:
+        raise RuntimeError(f"Failed to enumerate monitors: {e}")
+
+    for idx, (handle, _hdc, rect) in enumerate(enum, start=1):
+        left, top, right, bottom = rect
+        width = right - left
+        height = bottom - top
+        is_primary = idx == 1
+        try:
+            info = win32api.GetMonitorInfo(handle)
+            work = info.get("Work") or rect
+            is_primary = bool(info.get("Flags", 0) & 1)
+        except Exception:
+            work = rect
+
+        dpi_x, dpi_y, scale, fallback = _get_monitor_dpi_scale(handle)
+        monitors.append(
+            {
+                "monitor_id": idx,
+                "handle": int(handle),
+                "primary": is_primary,
+                "rect": {"left": left, "top": top, "right": right, "bottom": bottom},
+                "work_rect": {"left": work[0], "top": work[1], "right": work[2], "bottom": work[3]},
+                "size": {"width": width, "height": height},
+                "dpi": {"x": dpi_x, "y": dpi_y},
+                "scale": scale,
+                "dpi_fallback": fallback,
+            }
+        )
+
+    monitors.sort(key=lambda item: (not item["primary"], item["monitor_id"]))
+    return monitors
+
+
+def get_virtual_screen_bounds(monitors: list[dict] | None = None) -> dict:
+    """Return the full virtual-screen bounds across all monitors."""
+    monitors = monitors or get_monitor_info()
+    if not monitors:
+        raise RuntimeError("No monitors detected")
+    left = min(m["rect"]["left"] for m in monitors)
+    top = min(m["rect"]["top"] for m in monitors)
+    right = max(m["rect"]["right"] for m in monitors)
+    bottom = max(m["rect"]["bottom"] for m in monitors)
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": right - left,
+        "height": bottom - top,
+    }
+
+
+def get_monitor_for_point(x: int, y: int, monitors: list[dict] | None = None) -> dict | None:
+    """Return the monitor containing a point in virtual-screen coordinates."""
+    monitors = monitors or get_monitor_info()
+    for monitor in monitors:
+        rect = monitor["rect"]
+        if rect["left"] <= x < rect["right"] and rect["top"] <= y < rect["bottom"]:
+            return monitor
+    return None
+
+
+def get_monitor_for_rect(rect: tuple[int, int, int, int], monitors: list[dict] | None = None) -> dict | None:
+    """Return the monitor that contains the center point of a rect."""
+    left, top, right, bottom = rect
+    return get_monitor_for_point((left + right) // 2, (top + bottom) // 2, monitors=monitors)
+
+
+def normalize_region(
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    monitors: list[dict] | None = None,
+) -> tuple[int, int, int, int]:
+    """Order and clamp a region to the virtual-screen bounds."""
+    monitors = monitors or get_monitor_info()
+    virtual = get_virtual_screen_bounds(monitors)
+
+    if left > right:
+        left, right = right, left
+    if top > bottom:
+        top, bottom = bottom, top
+
+    left = max(left, virtual["left"])
+    top = max(top, virtual["top"])
+    right = min(right, virtual["right"])
+    bottom = min(bottom, virtual["bottom"])
+
+    if left >= right or top >= bottom:
+        raise ValueError(
+            "Requested region is outside the virtual screen bounds "
+            f"({virtual['left']},{virtual['top']},{virtual['right']},{virtual['bottom']})"
+        )
+    return left, top, right, bottom
+
+
+def validate_screen_point(x: int, y: int, monitors: list[dict] | None = None) -> dict:
+    """Validate a point against the virtual screen and return monitor info."""
+    monitors = monitors or get_monitor_info()
+    monitor = get_monitor_for_point(x, y, monitors=monitors)
+    if monitor is None:
+        virtual = get_virtual_screen_bounds(monitors)
+        raise ValueError(
+            f"Point ({x},{y}) is outside the virtual screen bounds "
+            f"({virtual['left']},{virtual['top']},{virtual['right']},{virtual['bottom']})"
+        )
+    return monitor
+
+
+def capture_image(
+    *,
+    monitor: int = 0,
+    left: int | None = None,
+    top: int | None = None,
+    right: int | None = None,
+    bottom: int | None = None,
+) -> tuple[Any, dict]:
+    """Capture an image and return both the PIL image and capture metadata."""
+    monitors = get_monitor_info() if HAS_WIN32 else []
+
+    if all(v is not None for v in (left, top, right, bottom)):
+        assert left is not None and top is not None and right is not None and bottom is not None
+        bbox = normalize_region(left, top, right, bottom, monitors=monitors)
+        img = ImageGrab.grab(bbox=bbox)
+        bounds = {"left": bbox[0], "top": bbox[1], "right": bbox[2], "bottom": bbox[3]}
+        captured_monitors = [
+            m["monitor_id"]
+            for m in monitors
+            if not (
+                m["rect"]["right"] <= bbox[0]
+                or m["rect"]["left"] >= bbox[2]
+                or m["rect"]["bottom"] <= bbox[1]
+                or m["rect"]["top"] >= bbox[3]
+            )
+        ]
+    elif monitor > 0:
+        bbox = _get_monitor_bbox(monitor)
+        if bbox is None:
+            raise ValueError(f"Monitor {monitor} not found")
+        img = ImageGrab.grab(bbox=bbox)
+        bounds = {"left": bbox[0], "top": bbox[1], "right": bbox[2], "bottom": bbox[3]}
+        captured_monitors = [monitor]
+    else:
+        img = ImageGrab.grab(all_screens=True)
+        virtual = get_virtual_screen_bounds(monitors) if monitors else {"left": 0, "top": 0, "right": img.width, "bottom": img.height, "width": img.width, "height": img.height}
+        bounds = {"left": virtual["left"], "top": virtual["top"], "right": virtual["right"], "bottom": virtual["bottom"]}
+        captured_monitors = [m["monitor_id"] for m in monitors] if monitors else []
+
+    metadata = {
+        "bounds": {**bounds, "width": bounds["right"] - bounds["left"], "height": bounds["bottom"] - bounds["top"]},
+        "captured_monitors": captured_monitors,
+        "monitors": monitors,
+        "virtual_screen": get_virtual_screen_bounds(monitors) if monitors else {"left": bounds["left"], "top": bounds["top"], "right": bounds["right"], "bottom": bounds["bottom"], "width": bounds["right"] - bounds["left"], "height": bounds["bottom"] - bounds["top"]},
+    }
+    return img, metadata
+
+
 # ---------------------------------------------------------------------------
 # Window info
 # ---------------------------------------------------------------------------
@@ -69,6 +268,8 @@ class WindowInfo:
     rect: tuple[int, int, int, int]  # left, top, right, bottom
     visible: bool
     pid: int = 0
+    process_name: str = ""
+    monitor_id: int = 0
 
     @property
     def width(self) -> int:
@@ -84,6 +285,7 @@ def enumerate_windows() -> list[WindowInfo]:
     if not HAS_WIN32:
         raise RuntimeError("pywin32 not installed — run `pip install pywin32`")
     results: list[WindowInfo] = []
+    monitors = get_monitor_info()
 
     def _cb(hwnd: int, _extra: None) -> bool:
         if not win32gui.IsWindowVisible(hwnd):
@@ -96,7 +298,18 @@ def enumerate_windows() -> list[WindowInfo]:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
         except Exception:
             pid = 0
-        results.append(WindowInfo(handle=hwnd, title=title, rect=rect, visible=True, pid=pid))
+        monitor = get_monitor_for_rect(rect, monitors=monitors)
+        results.append(
+            WindowInfo(
+                handle=hwnd,
+                title=title,
+                rect=rect,
+                visible=True,
+                pid=pid,
+                process_name=_safe_process_name(pid),
+                monitor_id=(monitor or {}).get("monitor_id", 0),
+            )
+        )
         return True
 
     win32gui.EnumWindows(_cb, None)
@@ -110,6 +323,7 @@ def get_interactive_elements() -> list[dict]:
     fg = win32gui.GetForegroundWindow()
     if not fg:
         return []
+    monitors = get_monitor_info()
     elements: list[dict] = []
     idx = [0]
 
@@ -122,6 +336,7 @@ def get_interactive_elements() -> list[dict]:
             rect = win32gui.GetWindowRect(hwnd)
         except Exception:
             return True
+        monitor = get_monitor_for_rect(rect, monitors=monitors)
         idx[0] += 1
         elements.append(
             {
@@ -129,6 +344,7 @@ def get_interactive_elements() -> list[dict]:
                 "class": cls,
                 "text": text,
                 "rect": {"left": rect[0], "top": rect[1], "right": rect[2], "bottom": rect[3]},
+                "monitor_id": (monitor or {}).get("monitor_id", 0),
             }
         )
         return True
@@ -188,6 +404,9 @@ def map_ui_elements(
     if not HAS_WIN32:
         raise RuntimeError("pywin32 not installed — run `pip install pywin32`")
 
+    monitors = get_monitor_info()
+    virtual_screen = get_virtual_screen_bounds(monitors)
+
     target_hwnd: int | None = None
     target_window: WindowInfo | None = None
     if window_title:
@@ -199,30 +418,48 @@ def map_ui_elements(
         target_hwnd = win32gui.GetForegroundWindow()
         if target_hwnd:
             rect = win32gui.GetWindowRect(target_hwnd)
+            try:
+                _, pid = win32process.GetWindowThreadProcessId(target_hwnd)
+            except Exception:
+                pid = 0
+            monitor = get_monitor_for_rect(rect, monitors=monitors)
             target_window = WindowInfo(
                 handle=target_hwnd,
                 title=win32gui.GetWindowText(target_hwnd),
                 rect=rect,
                 visible=True,
-                pid=0,
+                pid=pid,
+                process_name=_safe_process_name(pid),
+                monitor_id=(monitor or {}).get("monitor_id", 0),
             )
 
     if not target_hwnd or target_window is None:
         raise RuntimeError("No active window found")
 
     left, top, right, bottom = target_window.rect
+    target_monitor = get_monitor_for_rect(target_window.rect, monitors=monitors)
     results: list[dict] = [
         {
             "index": 0,
             "type": "window",
             "class": "Window",
             "handle": target_hwnd,
+            "element_id": _make_element_id(target_hwnd, 0, "Window", target_window.title),
+            "parent_handle": 0,
             "label": target_window.title,
+            "window_text": target_window.title,
             "rect": {"left": left, "top": top, "right": right, "bottom": bottom},
             "relative_rect": {"left": 0, "top": 0, "right": right - left, "bottom": bottom - top},
             "size": {"width": right - left, "height": bottom - top},
             "center": {"x": (left + right) // 2, "y": (top + bottom) // 2},
             "relative_center": {"x": (right - left) // 2, "y": (bottom - top) // 2},
+            "monitor_id": (target_monitor or {}).get("monitor_id", 0),
+            "monitor": target_monitor,
+            "on_primary_monitor": bool((target_monitor or {}).get("primary", False)),
+            "pid": target_window.pid,
+            "process_name": target_window.process_name,
+            "virtual_screen": virtual_screen,
+            "coordinate_hint": "Use center for absolute screen clicks, relative_center for window-relative automation.",
         }
     ]
 
@@ -245,6 +482,7 @@ def map_ui_elements(
         idx += 1
         cls = ""
         text = ""
+        parent_handle = 0
         try:
             cls = win32gui.GetClassName(hwnd)
         except Exception:
@@ -253,12 +491,19 @@ def map_ui_elements(
             text = win32gui.GetWindowText(hwnd)
         except Exception:
             pass
+        try:
+            parent_handle = win32gui.GetParent(hwnd) or 0
+        except Exception:
+            parent_handle = 0
+        monitor = get_monitor_for_rect(r, monitors=monitors)
 
         label = text or cls or f"element-{idx}"
         item = {
             "index": idx,
             "type": "control",
             "handle": hwnd,
+            "element_id": _make_element_id(hwnd, parent_handle, cls, label),
+            "parent_handle": parent_handle,
             "class": cls,
             "label": label,
             "window_text": text,
@@ -272,6 +517,10 @@ def map_ui_elements(
             "size": {"width": w, "height": h},
             "center": {"x": (r[0] + r[2]) // 2, "y": (r[1] + r[3]) // 2},
             "relative_center": {"x": ((r[0] + r[2]) // 2) - left, "y": ((r[1] + r[3]) // 2) - top},
+            "monitor_id": (monitor or {}).get("monitor_id", 0),
+            "monitor": monitor,
+            "on_primary_monitor": bool((monitor or {}).get("primary", False)),
+            "coordinate_hint": "Use center for absolute screen clicks, relative_center when anchoring to the mapped window.",
         }
 
         if include_text:
@@ -307,11 +556,130 @@ def _normalize_search_text(value: str | None) -> str:
 def _element_search_fields(element: dict) -> dict[str, str]:
     """Return searchable text fields for a mapped UI element."""
     return {
+        "type": str(element.get("type") or ""),
         "label": str(element.get("label") or ""),
         "window_text": str(element.get("window_text") or ""),
         "class": str(element.get("class") or ""),
+        "process_name": str(element.get("process_name") or ""),
         "ocr_text": str(element.get("ocr_text") or ""),
     }
+
+
+def _search_preview_item(element: dict) -> dict:
+    """Return a compact preview for search diagnostics."""
+    return {
+        "index": element.get("index"),
+        "type": element.get("type"),
+        "label": element.get("label") or "",
+        "class": element.get("class") or "",
+        "window_text": element.get("window_text") or "",
+        "monitor_id": element.get("monitor_id", 0),
+        "center": element.get("center"),
+        "relative_center": element.get("relative_center"),
+        "element_id": element.get("element_id") or "",
+    }
+
+
+def summarize_ui_map(mapped: list[dict], preview_limit: int = 12) -> dict:
+    """Build a compact, automation-friendly summary for a UI map."""
+    window = mapped[0] if mapped else None
+    controls = mapped[1:] if len(mapped) > 1 else []
+
+    class_counts: dict[str, int] = {}
+    monitor_counts: dict[str, int] = {}
+    preview: list[dict] = []
+    seen_preview_keys: set[tuple[str, str, str]] = set()
+    window_text_controls = 0
+    ocr_text_controls = 0
+    custom_rendered_controls = 0
+
+    custom_rendered_classes = {
+        "Chrome Legacy Window",
+        "Intermediate D3D Window",
+        "Windows.UI.Composition.DesktopWindowContentBridge",
+    }
+
+    for control in controls:
+        class_name = str(control.get("class") or "(unknown)")
+        class_counts[class_name] = class_counts.get(class_name, 0) + 1
+
+        monitor_key = str(control.get("monitor_id") or 0)
+        monitor_counts[monitor_key] = monitor_counts.get(monitor_key, 0) + 1
+
+        if control.get("window_text"):
+            window_text_controls += 1
+        if control.get("ocr_text"):
+            ocr_text_controls += 1
+        if class_name in custom_rendered_classes:
+            custom_rendered_controls += 1
+
+        preview_key = (
+            str(control.get("label") or ""),
+            class_name,
+            str(control.get("type") or ""),
+        )
+        if preview_key not in seen_preview_keys and len(preview) < preview_limit:
+            preview.append(_search_preview_item(control))
+            seen_preview_keys.add(preview_key)
+
+    notes: list[str] = []
+    if not controls:
+        notes.append(
+            "No child controls were exposed by Win32 for this window. Try OCR, AnnotatedSnapshot, or a broader Snapshot to target custom-drawn UI."
+        )
+    elif len(controls) <= 2:
+        notes.append(
+            f"Only {len(controls)} child controls were exposed by Win32 for this window, so custom-rendered UI may require OCR or image-based targeting."
+        )
+    if controls and custom_rendered_controls == len(controls):
+        notes.append(
+            "All exposed controls appear to be compositor or graphics surfaces rather than semantic widgets. Prefer OCR or AnnotatedSnapshot for precise click targets."
+        )
+
+    return {
+        "window_title": (window or {}).get("label") if window else None,
+        "window_monitor_id": (window or {}).get("monitor_id", 0) if window else 0,
+        "control_count": len(controls),
+        "class_counts": dict(sorted(class_counts.items(), key=lambda item: (-item[1], item[0]))),
+        "monitor_counts": dict(sorted(monitor_counts.items(), key=lambda item: int(item[0]))),
+        "text_observability": {
+            "window_text_controls": window_text_controls,
+            "ocr_text_controls": ocr_text_controls,
+            "controls_without_text": max(0, len(controls) - window_text_controls - ocr_text_controls),
+        },
+        "searchable_preview": preview,
+        "notes": notes,
+    }
+
+
+def _build_search_diagnostics(mapped: list[dict], query: str, matches: list[dict], preview_limit: int = 12) -> dict:
+    """Build search diagnostics and next-step hints for UIFind/UIClick."""
+    candidates = mapped if mapped else []
+    summary = summarize_ui_map(mapped, preview_limit=preview_limit)
+    recommendations: list[str] = []
+
+    if not matches:
+        recommendations.append(
+            f"No exact UI match was found for '{query}'. Review summary.searchable_preview for nearby labels/classes to refine the query."
+        )
+        if summary["notes"]:
+            recommendations.extend(summary["notes"])
+
+    return {
+        "searched_element_count": len(candidates),
+        "searchable_preview": [
+            _search_preview_item(element)
+            for element in candidates[:preview_limit]
+        ],
+        "summary": summary,
+        "recommendations": recommendations,
+    }
+
+
+def _make_element_id(handle: int, parent_handle: int, class_name: str, label: str) -> str:
+    """Build a stable-ish element identifier."""
+    raw = f"{handle}:{parent_handle}:{class_name}:{_normalize_search_text(label)}"
+    return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
 def find_ui_elements(
@@ -328,6 +696,29 @@ def find_ui_elements(
 
     Supported match modes: auto, exact, contains, fuzzy, regex.
     """
+    return find_ui_elements_with_context(
+        query=query,
+        window_title=window_title,
+        include_text=include_text,
+        max_results=max_results,
+        match_mode=match_mode,
+        max_elements=max_elements,
+        min_width=min_width,
+        min_height=min_height,
+    )["matches"]
+
+
+def find_ui_elements_with_context(
+    query: str,
+    window_title: str = "",
+    include_text: bool = False,
+    max_results: int = 5,
+    match_mode: str = "auto",
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> dict:
+    """Find UI matches and include diagnostics about the search space."""
     query = (query or "").strip()
     if not query:
         raise ValueError("query is required")
@@ -342,7 +733,7 @@ def find_ui_elements(
         min_width=min_width,
         min_height=min_height,
     )
-    elements = mapped[1:]
+    elements = mapped
     q_norm = _normalize_search_text(query)
     q_tokens = set(q_norm.split())
     try:
@@ -353,6 +744,8 @@ def find_ui_elements(
     pattern = None
     if match_mode == "regex":
         pattern = re.compile(query, re.IGNORECASE)
+
+    match_priority = {"": 0, "fuzzy": 1, "tokens": 2, "contains": 3, "regex": 4, "exact": 5}
 
     matches: list[dict] = []
     for el in elements:
@@ -389,11 +782,13 @@ def find_ui_elements(
                         match_type = match_type or "tokens"
                 if allow_fuzzy and fuzz is not None:
                     fuzzy_score = int(fuzz.partial_ratio(q_norm, value))
-                    if fuzzy_score >= max(60, score):
+                    if fuzzy_score > max(60, score):
                         score = fuzzy_score
                         match_type = "fuzzy"
 
-            if score > best_score:
+            if score > best_score or (
+                score == best_score and match_priority.get(match_type, 0) > match_priority.get(best_type, 0)
+            ):
                 best_score = score
                 best_type = match_type
                 best_field = field_name
@@ -401,17 +796,32 @@ def find_ui_elements(
 
         if best_score > 0:
             item = dict(el)
+            confidence = "high" if best_score >= 90 else "medium" if best_score >= 75 else "low"
+            reason = f"{best_type or 'matched'} on {best_field}" if best_field else "matched"
             item["match"] = {
                 "query": query,
+                "normalized_query": q_norm,
                 "score": best_score,
                 "type": best_type,
                 "field": best_field,
                 "value": best_value,
+                "confidence": confidence,
+                "reason": reason,
             }
             matches.append(item)
 
     matches.sort(key=lambda item: (-item["match"]["score"], item.get("index", 0)))
-    return matches[:max_results]
+    limited_matches = matches[:max_results]
+    diagnostics = _build_search_diagnostics(mapped, query, limited_matches)
+    return {
+        "window": mapped[0] if mapped else None,
+        "mapped": mapped,
+        "matches": limited_matches,
+        "searched_element_count": diagnostics["searched_element_count"],
+        "searchable_preview": diagnostics["searchable_preview"],
+        "summary": diagnostics["summary"],
+        "recommendations": diagnostics["recommendations"],
+    }
 
 
 def _watch_key(
@@ -435,6 +845,9 @@ def _watch_key(
 
 def _watch_identity(element: dict) -> tuple[str, str]:
     """Return a stable-ish identity for UI diffing."""
+    element_id = str(element.get("element_id") or "")
+    if element_id:
+        return (element_id, _normalize_search_text(element.get("class") or ""))
     return (
         _normalize_search_text(element.get("label") or element.get("window_text") or ""),
         _normalize_search_text(element.get("class") or ""),
@@ -487,6 +900,8 @@ def diff_ui_maps(previous: list[dict], current: list[dict]) -> dict:
         if prev_rel_center != curr_rel_center or prev_rel_rect != curr_rel_rect:
             moved.append(
                 {
+                    "index": curr_el.get("index"),
+                    "element_id": curr_el.get("element_id"),
                     "label": curr_el.get("label") or curr_el.get("class") or "",
                     "class": curr_el.get("class") or "",
                     "from": {
@@ -515,6 +930,8 @@ def diff_ui_maps(previous: list[dict], current: list[dict]) -> dict:
         if prev_text != curr_text:
             text_changed.append(
                 {
+                    "index": curr_el.get("index"),
+                    "element_id": curr_el.get("element_id"),
                     "label": curr_el.get("label") or curr_el.get("class") or "",
                     "class": curr_el.get("class") or "",
                     "from": prev_text,
@@ -610,11 +1027,7 @@ def take_screenshot(quality: int = 75, max_width: int = 0, monitor: int = 0) -> 
         max_width: Max width in pixels. 0=no resize (native resolution).
         monitor: 0=all monitors, 1/2/3=specific monitor.
     """
-    if monitor == 0:
-        img = ImageGrab.grab(all_screens=True)
-    else:
-        bbox = _get_monitor_bbox(monitor)
-        img = ImageGrab.grab(bbox=bbox)
+    img, _metadata = capture_image(monitor=monitor)
     # Resize if needed
     if max_width > 0 and img.width > max_width:
         ratio = max_width / img.width

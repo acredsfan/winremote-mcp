@@ -9,6 +9,8 @@ from pathlib import Path
 
 from PIL import ImageGrab
 
+from winremote import desktop
+
 
 def _screenshot_region(
     left: int | None = None,
@@ -18,9 +20,10 @@ def _screenshot_region(
 ) -> bytes:
     """Capture a region (or full screen) and return PNG bytes."""
     if left is not None and top is not None and right is not None and bottom is not None:
-        img = ImageGrab.grab(bbox=(left, top, right, bottom))
+        left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
+        img, _metadata = desktop.capture_image(left=left, top=top, right=right, bottom=bottom)
     else:
-        img = ImageGrab.grab()
+        img, _metadata = desktop.capture_image()
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -46,9 +49,10 @@ def ocr_pytesseract(
         )
 
     if left is not None and top is not None and right is not None and bottom is not None:
-        img = ImageGrab.grab(bbox=(left, top, right, bottom))
+        left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
+        img, _metadata = desktop.capture_image(left=left, top=top, right=right, bottom=bottom)
     else:
-        img = ImageGrab.grab()
+        img, _metadata = desktop.capture_image()
 
     text: str = pytesseract.image_to_string(img, lang=lang)
     return text.strip()

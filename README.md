@@ -397,6 +397,8 @@ See [SECURITY.md](SECURITY.md) for the full security guide.
 | UIWatch | Diff UI layouts between snapshots to detect added, removed, moved, or changed controls |
 | OCR | Extract text from screen via OCR (pytesseract or Windows built-in) |
 | ScreenRecord | Record screen activity as animated GIF |
+
+All screen/UI tools use **virtual-screen coordinates** across all monitors. Structured payloads now include monitor metadata, virtual-screen bounds, and both absolute (`center`, `rect`) and window-relative (`relative_center`, `relative_rect`) coordinates.
 | **Input** | |
 | Click | Mouse click (left/right/middle, single/double/hover) |
 | Type | Type text at coordinates |

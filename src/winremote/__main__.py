@@ -74,6 +74,26 @@ def _check_win32(tool_name: str = "This tool") -> str | None:
     return None
 
 
+def _monitor_context() -> dict:
+    """Best-effort monitor metadata for tool payloads."""
+    try:
+        monitors = desktop.get_monitor_info()
+        virtual_screen = desktop.get_virtual_screen_bounds(monitors)
+        return {"monitors": monitors, "virtual_screen": virtual_screen}
+    except Exception:
+        return {"monitors": [], "virtual_screen": None}
+
+
+def _ui_coordinate_spaces() -> dict[str, str]:
+    """Describe coordinate semantics for structured UI payloads."""
+    return {
+        "center": "Absolute virtual-screen coordinates in pixels; safe for direct click/move actions.",
+        "rect": "Absolute virtual-screen rectangle in pixels.",
+        "relative_center": "Coordinates relative to the mapped window's top-left corner.",
+        "relative_rect": "Rectangle relative to the mapped window's top-left corner.",
+    }
+
+
 def _ensure_session_connected() -> str | None:
     """Reconnect disconnected Windows session to console if needed.
 
@@ -175,6 +195,7 @@ def Snapshot(
     try:
         parts = []
         use_vision = _tobool(use_vision)
+        monitor_ctx = _monitor_context()
 
         # Screenshot (auto-reconnect session if grab fails)
         if use_vision:
@@ -195,9 +216,26 @@ def Snapshot(
 
         # Window list
         windows = desktop.enumerate_windows()
-        win_lines = [f"**System Language:** {desktop._get_system_language()}", "", "**Windows:**"]
+        win_lines = [f"**System Language:** {desktop._get_system_language()}"]
+        if monitor_ctx["monitors"]:
+            win_lines.extend(["", "**Monitors:**"])
+            for mon in monitor_ctx["monitors"]:
+                rect = mon["rect"]
+                win_lines.append(
+                    "  "
+                    f"Monitor {mon['monitor_id']}"
+                    f"{' (primary)' if mon.get('primary') else ''}"
+                    f": {mon['size']['width']}x{mon['size']['height']}"
+                    f" at ({rect['left']},{rect['top']}) -> ({rect['right']},{rect['bottom']})"
+                    f", scale={mon.get('scale', 1.0)}"
+                )
+        win_lines.extend(["", "**Windows:**"])
         for w in windows:
-            win_lines.append(f"  [{w.handle}] {w.title} ({w.width}x{w.height} at {w.rect[0]},{w.rect[1]})")
+            proc = f" pid={w.pid} {w.process_name}" if getattr(w, 'pid', 0) else ""
+            mon = f" monitor={getattr(w, 'monitor_id', 0)}" if getattr(w, 'monitor_id', 0) else ""
+            win_lines.append(
+                f"  [{w.handle}] {w.title} ({w.width}x{w.height} at {w.rect[0]},{w.rect[1]}){mon}{proc}"
+            )
 
         # Interactive elements from foreground window
         elements = desktop.get_interactive_elements()
@@ -209,7 +247,8 @@ def Snapshot(
                 cx = (r["left"] + r["right"]) // 2
                 cy = (r["top"] + r["bottom"]) // 2
                 label = el["text"] or el["class"]
-                win_lines.append(f"  [{el['index']}] {label} — center ({cx},{cy})")
+                monitor_suffix = f" monitor={el.get('monitor_id', 0)}" if el.get("monitor_id") else ""
+                win_lines.append(f"  [{el['index']}] {label} — center ({cx},{cy}){monitor_suffix}")
 
         parts.append(TextContent(type="text", text="\n".join(win_lines)))
         return parts
@@ -239,6 +278,7 @@ def Click(
         action: 'click', 'double', or 'hover'.
     """
     try:
+        desktop.validate_screen_point(x, y)
         if action == "hover":
             pyautogui.moveTo(x, y)
             return f"Hovered at ({x},{y})"
@@ -1266,6 +1306,7 @@ def OCR(
     try:
         region = {}
         if left or top or right or bottom:
+            left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
             region = {"left": left, "top": top, "right": right, "bottom": bottom}
         text = ocr.run_ocr(**region, lang=lang) if region else ocr.run_ocr(lang=lang)
         if not text:
@@ -1310,6 +1351,7 @@ def ScreenRecord(
     try:
         region = {}
         if left or top or right or bottom:
+            left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
             region = {"left": left, "top": top, "right": right, "bottom": bottom}
         b64 = recording.record_screen(duration=duration, fps=fps, max_width=max_width, **region)
         return [
@@ -1351,17 +1393,17 @@ def AnnotatedSnapshot(
     try:
         import io
 
-        from PIL import ImageDraw, ImageFont, ImageGrab
+        from PIL import ImageDraw, ImageFont
 
         # Take screenshot (auto-reconnect session if grab fails)
         try:
-            img = ImageGrab.grab()
+            img, capture_meta = desktop.capture_image()
         except Exception as screenshot_error:
             reconnect_result = _ensure_session_connected()
             if reconnect_result is not None:
                 return [TextContent(type="text", text=f"AnnotatedSnapshot error: {screenshot_error}")]
             try:
-                img = ImageGrab.grab()
+                img, capture_meta = desktop.capture_image()
             except Exception as retry_error:
                 return [
                     TextContent(
@@ -1369,12 +1411,17 @@ def AnnotatedSnapshot(
                         text=f"AnnotatedSnapshot error (after session reconnect): {retry_error}",
                     )
                 ]
+        original_width = img.width
+        original_left = capture_meta["bounds"]["left"]
+        original_top = capture_meta["bounds"]["top"]
         if max_width > 0 and img.width > max_width:
             ratio = max_width / img.width
             img = img.resize((max_width, int(img.height * ratio)))
+        scale = img.width / original_width if original_width else 1.0
 
         # Get interactive elements
-        elements = desktop.get_interactive_elements()
+        mapped = desktop.map_ui_elements(max_elements=max_elements)
+        elements = mapped[1:] if len(mapped) > 1 else []
         if not elements:
             # Return screenshot with no annotations
             buf = io.BytesIO()
@@ -1393,17 +1440,14 @@ def AnnotatedSnapshot(
         except Exception:
             font = ImageFont.load_default()
 
-        # Scale factor if image was resized
-        scale = img.width / ImageGrab.grab().width if img.width != ImageGrab.grab().width else 1.0
-
         element_lines = []
         for el in elements[:max_elements]:
             idx = el["index"]
             r = el["rect"]
-            x1 = int(r["left"] * scale)
-            y1 = int(r["top"] * scale)
-            x2 = int(r["right"] * scale)
-            y2 = int(r["bottom"] * scale)
+            x1 = int((r["left"] - original_left) * scale)
+            y1 = int((r["top"] - original_top) * scale)
+            x2 = int((r["right"] - original_left) * scale)
+            y2 = int((r["bottom"] - original_top) * scale)
 
             # Draw red rectangle
             draw.rectangle([x1, y1, x2, y2], outline="red", width=2)
@@ -1419,8 +1463,10 @@ def AnnotatedSnapshot(
             # Build text description
             cx = (r["left"] + r["right"]) // 2
             cy = (r["top"] + r["bottom"]) // 2
-            name = el["text"] or el["class"]
-            element_lines.append(f"  [{idx}] {name} — center ({cx},{cy})")
+            name = el.get("label") or el.get("window_text") or el.get("class")
+            element_lines.append(
+                f"  [{idx}] {name} — center ({cx},{cy}) monitor={el.get('monitor_id', 0)}"
+            )
 
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=quality)
@@ -1475,21 +1521,35 @@ def UIMap(
             return "No UI elements detected."
 
         header = mapped[0]
+        monitor_ctx = _monitor_context()
         lines = [
             f"Target window: {header['label']}",
             (
                 f"Window rect: ({header['rect']['left']},{header['rect']['top']})"
                 f" -> ({header['rect']['right']},{header['rect']['bottom']})"
             ),
+            f"Window monitor: {header.get('monitor_id', 0)}",
+            f"Process: {header.get('process_name', '') or 'unknown'} (pid={header.get('pid', 0)})",
             f"Mapped controls: {max(0, len(mapped) - 1)}",
             "",
         ]
+        if monitor_ctx["monitors"]:
+            lines.append("Monitors:")
+            for mon in monitor_ctx["monitors"]:
+                rect = mon["rect"]
+                lines.append(
+                    f"  Monitor {mon['monitor_id']}{' (primary)' if mon.get('primary') else ''}: "
+                    f"({rect['left']},{rect['top']}) -> ({rect['right']},{rect['bottom']})"
+                )
+            lines.append("")
         for el in mapped[1:]:
             c = el["center"]
             r = el["rect"]
             line = (
                 f"[{el['index']}] {el.get('label', '')}"
+                f" | id={el.get('element_id', '')}"
                 f" | class={el.get('class', '')}"
+                f" | monitor={el.get('monitor_id', 0)}"
                 f" | center=({c['x']},{c['y']})"
                 f" | rect=({r['left']},{r['top']},{r['right']},{r['bottom']})"
             )
@@ -1532,11 +1592,17 @@ def UIMapJson(
             min_width=min_width,
             min_height=min_height,
         )
+        monitor_ctx = _monitor_context()
         payload = {
+            "requested_window_title": window_title or None,
             "window": mapped[0] if mapped else None,
             "controls": mapped[1:] if len(mapped) > 1 else [],
             "count": max(0, len(mapped) - 1),
             "include_text": _tobool(include_text),
+            "summary": desktop.summarize_ui_map(mapped),
+            "monitors": monitor_ctx["monitors"],
+            "virtual_screen": monitor_ctx["virtual_screen"],
+            "coordinate_spaces": _ui_coordinate_spaces(),
         }
         return json.dumps(payload, indent=2)
     except Exception as e:
@@ -1570,7 +1636,7 @@ def UIFind(
     try:
         import json
 
-        matches = desktop.find_ui_elements(
+        search_result = desktop.find_ui_elements_with_context(
             query=query,
             window_title=window_title,
             include_text=_tobool(include_text),
@@ -1580,12 +1646,20 @@ def UIFind(
             min_width=min_width,
             min_height=min_height,
         )
+        monitor_ctx = _monitor_context()
         payload = {
             "query": query,
             "window_title": window_title or None,
             "match_mode": match_mode,
-            "count": len(matches),
-            "matches": matches,
+            "count": len(search_result["matches"]),
+            "matches": search_result["matches"],
+            "searched_element_count": search_result["searched_element_count"],
+            "searchable_preview": search_result["searchable_preview"],
+            "summary": search_result["summary"],
+            "recommendations": search_result["recommendations"],
+            "monitors": monitor_ctx["monitors"],
+            "virtual_screen": monitor_ctx["virtual_screen"],
+            "coordinate_spaces": _ui_coordinate_spaces(),
         }
         return json.dumps(payload, indent=2)
     except Exception as e:
@@ -1618,7 +1692,7 @@ def UIClick(
     if err:
         return err
     try:
-        matches = desktop.find_ui_elements(
+        search_result = desktop.find_ui_elements_with_context(
             query=query,
             window_title=window_title,
             include_text=_tobool(include_text),
@@ -1628,13 +1702,18 @@ def UIClick(
             min_width=min_width,
             min_height=min_height,
         )
+        matches = search_result["matches"]
         if not matches:
+            recommendations = search_result.get("recommendations") or []
+            if recommendations:
+                return f"No UI element matched '{query}'. {recommendations[0]}"
             return f"No UI element matched '{query}'"
 
         target = matches[0]
         center = target["center"]
         x = center["x"]
         y = center["y"]
+        desktop.validate_screen_point(x, y)
         if action == "hover":
             pyautogui.moveTo(x, y)
             verb = "Hovered"
@@ -1647,7 +1726,10 @@ def UIClick(
 
         label = target.get("label") or target.get("class") or "(unnamed element)"
         score = target.get("match", {}).get("score", "?")
-        return f"{verb} '{label}' at ({x},{y}) using query '{query}' (score={score})"
+        return (
+            f"{verb} '{label}' at ({x},{y}) using query '{query}' "
+            f"(score={score}, monitor={target.get('monitor_id', 0)}, id={target.get('element_id', '')})"
+        )
     except Exception as e:
         return f"UIClick error: {e}"
 
@@ -1688,6 +1770,8 @@ def UIWatch(
             reset=_tobool(reset),
             update_baseline=_tobool(update_baseline),
         )
+        payload.update(_monitor_context())
+        payload["coordinate_spaces"] = _ui_coordinate_spaces()
         return json.dumps(payload, indent=2)
     except Exception as e:
         return f"UIWatch error: {e}"
