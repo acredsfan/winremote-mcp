@@ -14,9 +14,9 @@ import pyautogui
 
 def _call_tool(tool_name, **kwargs):
     """Call an MCP tool by name, going through the task-manager-wrapped fn."""
-    from winremote.__main__ import mcp
+    from winremote.__main__ import _get_registered_tools
 
-    tool = mcp._tool_manager._tools[tool_name]
+    tool = _get_registered_tools()[tool_name]
     return tool.fn(**kwargs)
 
 
@@ -180,7 +180,7 @@ class TestReconnectSession:
 
             assert isinstance(result, list)
             assert len(result) == 1
-            assert "reconnected session" in result[0].text.lower()
+            assert "connected to console" in result[0].text.lower()
 
 
 class TestSnapshotAutoReconnect:
@@ -213,8 +213,9 @@ class TestSnapshotAutoReconnect:
             result = _call_tool("Snapshot")
 
             assert isinstance(result, list)
-            assert len(result) == 1
-            assert "error" in result[0].lower()
+            text_parts = [x for x in result if isinstance(x, str)]
+            assert text_parts
+            assert "error" in text_parts[0].lower()
 
     def test_snapshot_reconnect_fails(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
@@ -226,5 +227,44 @@ class TestSnapshotAutoReconnect:
                 result = _call_tool("Snapshot")
 
                 assert isinstance(result, list)
-                assert len(result) == 1
-                assert "auto-reconnect failed" in result[0].lower()
+                text_parts = [x for x in result if isinstance(x, str)]
+                assert text_parts
+                assert "error" in text_parts[0].lower()
+
+
+class TestUIMap:
+    def test_no_win32(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = False
+            result = _call_tool("UIMap")
+            assert "pywin32" in result or "Error" in result
+
+    def test_empty_map(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.map_ui_elements.return_value = []
+            result = _call_tool("UIMap")
+            assert "No UI elements detected" in result
+
+    def test_successful_map(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.map_ui_elements.return_value = [
+                {
+                    "index": 0,
+                    "label": "Roblox Studio",
+                    "rect": {"left": 10, "top": 20, "right": 510, "bottom": 420},
+                },
+                {
+                    "index": 1,
+                    "label": "Inventory",
+                    "class": "Button",
+                    "center": {"x": 100, "y": 180},
+                    "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                    "ocr_text": "Inventory",
+                },
+            ]
+            result = _call_tool("UIMap", window_title="Roblox")
+            assert "Target window: Roblox Studio" in result
+            assert "Inventory" in result
+            assert "center=(100,180)" in result

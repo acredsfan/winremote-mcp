@@ -390,6 +390,7 @@ See [SECURITY.md](SECURITY.md) for the full security guide.
 | **Desktop** | |
 | Snapshot | Screenshot (JPEG, configurable quality/max_width) + window list + UI elements |
 | AnnotatedSnapshot | Screenshot with numbered labels on interactive elements |
+| UIMap | Map window/panel/button coordinates (x,y and bounding boxes), optional OCR per element |
 | OCR | Extract text from screen via OCR (pytesseract or Windows built-in) |
 | ScreenRecord | Record screen activity as animated GIF |
 | **Input** | |

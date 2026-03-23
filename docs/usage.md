@@ -170,6 +170,10 @@ Create/edit `.cursor/mcp.json` in your project:
 # Annotated screenshot
 "Take an annotated screenshot showing numbered labels on all clickable elements"
 
+# UI coordinate mapping for buttons/panels
+"Map all UI element coordinates for the current foreground window"
+"Map Roblox Studio UI coordinates and include OCR text"
+
 # Multi-monitor support  
 "Take a screenshot of monitor 2"
 ```

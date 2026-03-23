@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, patch
 
 
 def _call_tool(tool_name, **kwargs):
-    from winremote.__main__ import mcp
+    from winremote.__main__ import _get_registered_tools
 
-    tool = mcp._tool_manager._tools[tool_name]
+    tool = _get_registered_tools()[tool_name]
     return tool.fn(**kwargs)
 
 

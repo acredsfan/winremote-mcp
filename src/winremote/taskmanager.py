@@ -54,6 +54,7 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "App": ToolCategory.DESKTOP,
     "OCR": ToolCategory.DESKTOP,
     "ScreenRecord": ToolCategory.DESKTOP,
+    "UIMap": ToolCategory.DESKTOP,
     "LockScreen": ToolCategory.DESKTOP,
     "Wait": ToolCategory.DESKTOP,
     # File operations

@@ -1435,6 +1435,72 @@ def AnnotatedSnapshot(
         return [TextContent(type="text", text=f"AnnotatedSnapshot error: {e}")]
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UIMap",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def UIMap(
+    window_title: str = "",
+    include_text: bool | str = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> str:
+    """Map visible UI controls to absolute screen coordinates.
+
+    Useful for finding button/panel locations in apps like Roblox Studio.
+
+    Args:
+        window_title: Optional target window title (fuzzy/contains matched). Empty = foreground window.
+        include_text: If true, run OCR on each element bbox and include extracted text.
+        max_elements: Maximum number of child controls to return (default 100).
+        min_width: Minimum element width in px (default 4).
+        min_height: Minimum element height in px (default 4).
+    """
+    err = _check_win32("UIMap")
+    if err:
+        return err
+    try:
+        mapped = desktop.map_ui_elements(
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+        )
+        if not mapped:
+            return "No UI elements detected."
+
+        header = mapped[0]
+        lines = [
+            f"Target window: {header['label']}",
+            (
+                f"Window rect: ({header['rect']['left']},{header['rect']['top']})"
+                f" -> ({header['rect']['right']},{header['rect']['bottom']})"
+            ),
+            f"Mapped controls: {max(0, len(mapped) - 1)}",
+            "",
+        ]
+        for el in mapped[1:]:
+            c = el["center"]
+            r = el["rect"]
+            line = (
+                f"[{el['index']}] {el.get('label', '')}"
+                f" | class={el.get('class', '')}"
+                f" | center=({c['x']},{c['y']})"
+                f" | rect=({r['left']},{r['top']},{r['right']},{r['bottom']})"
+            )
+            if el.get("ocr_text"):
+                line += f" | ocr='{el['ocr_text']}'"
+            lines.append(line)
+        return "\n".join(lines)
+    except Exception as e:
+        return f"UIMap error: {e}"
+
+
 # ================================ Task Management ================================
 
 

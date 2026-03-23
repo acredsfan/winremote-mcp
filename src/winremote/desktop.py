@@ -6,6 +6,7 @@ import base64
 import ctypes
 import io
 import locale
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -135,6 +136,153 @@ def get_interactive_elements() -> list[dict]:
     except Exception:
         pass
     return elements
+
+
+def _find_window_by_title(title: str) -> WindowInfo | None:
+    """Best-effort fuzzy find a top-level window by title."""
+    title = (title or "").strip()
+    if not title:
+        return None
+    windows = enumerate_windows()
+    q = title.lower()
+
+    # Prefer exact/contains matches first
+    exact = [w for w in windows if w.title.lower() == q]
+    if exact:
+        return exact[0]
+    contains = [w for w in windows if q in w.title.lower()]
+    if contains:
+        return contains[0]
+
+    try:
+        from thefuzz import fuzz
+
+        best: WindowInfo | None = None
+        best_score = 0
+        for w in windows:
+            score = fuzz.partial_ratio(q, w.title.lower())
+            if score > best_score:
+                best = w
+                best_score = score
+        if best is not None and best_score >= 50:
+            return best
+    except Exception:
+        pass
+    return None
+
+
+def map_ui_elements(
+    window_title: str = "",
+    include_text: bool = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+) -> list[dict]:
+    """Map UI elements and their coordinates for a target window or foreground window.
+
+    Returns top-level window and child controls with absolute coordinates.
+    If include_text=True, also runs OCR on each element bbox and includes extracted text.
+    """
+    if not HAS_WIN32:
+        raise RuntimeError("pywin32 not installed — run `pip install pywin32`")
+
+    target_hwnd: int | None = None
+    target_window: WindowInfo | None = None
+    if window_title:
+        target_window = _find_window_by_title(window_title)
+        if target_window is None:
+            raise ValueError(f"No window matching '{window_title}'")
+        target_hwnd = target_window.handle
+    else:
+        target_hwnd = win32gui.GetForegroundWindow()
+        if target_hwnd:
+            rect = win32gui.GetWindowRect(target_hwnd)
+            target_window = WindowInfo(
+                handle=target_hwnd,
+                title=win32gui.GetWindowText(target_hwnd),
+                rect=rect,
+                visible=True,
+                pid=0,
+            )
+
+    if not target_hwnd or target_window is None:
+        raise RuntimeError("No active window found")
+
+    left, top, right, bottom = target_window.rect
+    results: list[dict] = [
+        {
+            "index": 0,
+            "type": "window",
+            "class": "Window",
+            "label": target_window.title,
+            "rect": {"left": left, "top": top, "right": right, "bottom": bottom},
+            "size": {"width": right - left, "height": bottom - top},
+            "center": {"x": (left + right) // 2, "y": (top + bottom) // 2},
+        }
+    ]
+
+    idx = 0
+
+    def _cb(hwnd: int, _extra: None) -> bool:
+        nonlocal idx
+        if len(results) - 1 >= max_elements:
+            return False
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
+        try:
+            r = win32gui.GetWindowRect(hwnd)
+        except Exception:
+            return True
+        w = r[2] - r[0]
+        h = r[3] - r[1]
+        if w < min_width or h < min_height:
+            return True
+        idx += 1
+        cls = ""
+        text = ""
+        try:
+            cls = win32gui.GetClassName(hwnd)
+        except Exception:
+            pass
+        try:
+            text = win32gui.GetWindowText(hwnd)
+        except Exception:
+            pass
+
+        label = text or cls or f"element-{idx}"
+        item = {
+            "index": idx,
+            "type": "control",
+            "handle": hwnd,
+            "class": cls,
+            "label": label,
+            "window_text": text,
+            "rect": {"left": r[0], "top": r[1], "right": r[2], "bottom": r[3]},
+            "size": {"width": w, "height": h},
+            "center": {"x": (r[0] + r[2]) // 2, "y": (r[1] + r[3]) // 2},
+        }
+
+        if include_text:
+            try:
+                from winremote import ocr
+
+                ocr_text = ocr.run_ocr(left=r[0], top=r[1], right=r[2], bottom=r[3])
+                if ocr_text:
+                    ocr_text = re.sub(r"\s+", " ", ocr_text).strip()
+                if ocr_text:
+                    item["ocr_text"] = ocr_text[:500]
+            except Exception:
+                pass
+
+        results.append(item)
+        return True
+
+    try:
+        win32gui.EnumChildWindows(target_hwnd, _cb, None)
+    except Exception:
+        pass
+
+    return results
 
 
 # ---------------------------------------------------------------------------

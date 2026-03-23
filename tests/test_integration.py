@@ -33,9 +33,9 @@ class TestMCPToolRegistration:
     """Verify all expected tools are registered in the MCP server."""
 
     def test_expected_tools_registered(self):
-        from winremote.__main__ import mcp
+        from winremote.__main__ import _get_registered_tools
 
-        tool_names = set(mcp._tool_manager._tools.keys())
+        tool_names = set(_get_registered_tools().keys())
 
         expected = {
             "Snapshot",
@@ -78,6 +78,7 @@ class TestMCPToolRegistration:
             "OCR",
             "ScreenRecord",
             "AnnotatedSnapshot",
+            "UIMap",
             "CancelTask",
             "GetTaskStatus",
             "GetRunningTasks",
@@ -87,8 +88,8 @@ class TestMCPToolRegistration:
             assert name in tool_names, f"Tool '{name}' not registered"
 
     def test_tool_count(self):
-        from winremote.__main__ import mcp
+        from winremote.__main__ import _get_registered_tools
 
-        tools = mcp._tool_manager._tools
+        tools = _get_registered_tools()
         # Should have a substantial number of tools
         assert len(tools) >= 30
