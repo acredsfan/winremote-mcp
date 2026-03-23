@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-03-23
+
+### Added
+
+- **HTTPS/TLS support**: `--ssl-certfile` and `--ssl-keyfile` CLI options (and `server.ssl_certfile` / `server.ssl_keyfile` in `winremote.toml`) to run the server over HTTPS. When both are provided, the startup banner shows `[https ON]`. Generate a self-signed cert with: `openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes`.
+- **OAuth 2.0 Authorization Server** (closes #33): Full MCP-compatible OAuth 2.0 AS with:
+  - `GET /.well-known/oauth-authorization-server` — RFC 8414 server metadata
+  - `POST /oauth/register` — RFC 7591 dynamic client registration
+  - `GET /oauth/authorize` — Authorization Code flow with PKCE (RFC 7636)
+  - `POST /oauth/token` — token exchange with PKCE verification
+  - `--oauth-client-id` and `--oauth-client-secret` CLI options (and `security.oauth_client_id` / `security.oauth_client_secret` in config) to whitelist a specific client
+  - Compatible with Claude Desktop and other MCP clients that require OAuth or HTTPS
+  - Startup banner shows `[oauth ON]` when OAuth is configured
+  - Existing `--auth-key` Bearer token auth continues to work alongside OAuth
+
 ## [0.4.8] - 2026-02-21
 
 ### Fixed
@@ -49,4 +64,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://github.com/dddabtc/winremote-mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dddabtc/winremote-mcp/releases/tag/v0.2.0
 
+[0.4.9]: https://github.com/dddabtc/winremote-mcp/releases/tag/v0.4.9
 [0.4.8]: https://github.com/dddabtc/winremote-mcp/releases/tag/v0.4.8
