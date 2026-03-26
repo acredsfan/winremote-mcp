@@ -6,6 +6,7 @@ import json
 from unittest.mock import patch
 
 import pyautogui
+from PIL import Image
 from winremote import desktop
 
 # The MCP tools are wrapped by task_manager; access the original functions
@@ -490,3 +491,492 @@ class TestUIWatch:
             assert payload["baseline_created"] is False
             assert payload["diff"]["summary"]["added"] == 1
             assert payload["diff"]["summary"]["moved"] == 1
+
+
+class TestObserveScreen:
+    def test_returns_structured_json(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.normalize_region.return_value = (10, 20, 210, 220)
+            mock_desktop.observe_screen.return_value = {
+                "target": {
+                    "mode": "window",
+                    "window": {"title": "Roblox Studio"},
+                    "bounds": {"left": 10, "top": 20, "right": 210, "bottom": 220, "width": 200, "height": 200},
+                    "captured_monitors": [1],
+                },
+                "baseline_created": True,
+                "baseline_reset": False,
+                "changed": None,
+                "change_ratio": None,
+                "changed_tiles": 0,
+                "changed_regions": [],
+                "screen_digest": "abc123",
+                "grid": {"columns": 6, "rows": 6},
+                "sample_size": {"width": 96, "height": 96},
+                "window_count": 1,
+                "windows": [{"title": "Roblox Studio"}],
+                "ui_scope": "target_window",
+                "ui_summary": {"control_count": 1, "notes": [], "searchable_preview": [{"label": "Inventory"}]},
+                "searchable_preview": [{"label": "Inventory"}],
+                "monitors": [{"monitor_id": 1}],
+                "virtual_screen": {"left": 0, "top": 0, "right": 1920, "bottom": 1080, "width": 1920, "height": 1080},
+                "recommendations": ["Baseline created."],
+            }
+
+            result = _call_tool("ObserveScreen", window_title="Roblox Studio", include_text=True)
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["target"]["mode"] == "window"
+            assert payload["baseline_created"] is True
+            assert payload["screen_digest"] == "abc123"
+            assert payload["coordinate_spaces"]["center"].startswith("Absolute")
+
+    def test_supports_region_observation(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            mock_desktop.normalize_region.return_value = (0, 0, 100, 100)
+            mock_desktop.observe_screen.return_value = {
+                "target": {
+                    "mode": "region",
+                    "window": None,
+                    "bounds": {"left": 0, "top": 0, "right": 100, "bottom": 100, "width": 100, "height": 100},
+                    "captured_monitors": [1],
+                },
+                "baseline_created": False,
+                "baseline_reset": False,
+                "changed": True,
+                "change_ratio": 0.25,
+                "changed_tiles": 4,
+                "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50, "width": 50, "height": 50, "tile_count": 4}],
+                "screen_digest": "def456",
+                "grid": {"columns": 4, "rows": 4},
+                "sample_size": {"width": 64, "height": 64},
+                "window_count": 0,
+                "windows": [],
+                "ui_scope": None,
+                "ui_summary": None,
+                "searchable_preview": [],
+                "monitors": [{"monitor_id": 1}],
+                "virtual_screen": {"left": 0, "top": 0, "right": 1920, "bottom": 1080, "width": 1920, "height": 1080},
+                "recommendations": ["Screen change detected."],
+            }
+
+            result = _call_tool("ObserveScreen", right=100, bottom=100, grid_size=4)
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["target"]["mode"] == "region"
+            assert payload["changed"] is True
+            assert payload["changed_regions"][0]["tile_count"] == 4
+
+
+class TestUIAct:
+    def test_clicks_and_reports_change(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "window": {"label": "Roblox Studio"},
+                "matches": [
+                    {
+                        "label": "Inventory",
+                        "class": "Button",
+                        "element_id": "abc123",
+                        "monitor_id": 1,
+                        "center": {"x": 100, "y": 180},
+                        "relative_center": {"x": 50, "y": 80},
+                        "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                        "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
+                    }
+                ],
+                "searched_element_count": 2,
+                "searchable_preview": [{"label": "Inventory"}],
+                "summary": {"control_count": 1, "notes": []},
+                "recommendations": [],
+            }
+            mock_desktop.validate_screen_point.return_value = {"monitor_id": 1}
+            mock_desktop.focus_window.return_value = "Focused window"
+            mock_desktop.observe_screen.side_effect = [
+                {"baseline_created": True, "changed": None, "changed_regions": []},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+            ]
+
+            result = _call_tool("UIAct", query="Inventory")
+
+            payload = _parse_task_wrapped_json(result)
+            pyautogui.moveTo.assert_called_with(100, 180)
+            pyautogui.click.assert_called_with(100, 180, button="left")
+            assert payload["status"] == "completed"
+            assert payload["target"]["label"] == "Inventory"
+            assert payload["observation_after"]["changed"] is True
+
+    def test_type_action_types_text(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "window": {"label": "Notepad"},
+                "matches": [
+                    {
+                        "label": "Editor",
+                        "class": "Edit",
+                        "element_id": "edit1",
+                        "monitor_id": 1,
+                        "center": {"x": 20, "y": 30},
+                        "relative_center": {"x": 10, "y": 10},
+                        "rect": {"left": 0, "top": 0, "right": 40, "bottom": 60},
+                        "match": {"score": 96, "type": "contains", "field": "label", "value": "Editor"},
+                    }
+                ],
+                "searched_element_count": 1,
+                "searchable_preview": [{"label": "Editor"}],
+                "summary": {"control_count": 1, "notes": []},
+                "recommendations": [],
+            }
+            mock_desktop.validate_screen_point.return_value = {"monitor_id": 1}
+            mock_desktop.focus_window.return_value = "Focused window"
+            mock_desktop.observe_screen.return_value = {"baseline_created": True, "changed": None, "changed_regions": []}
+
+            result = _call_tool("UIAct", query="Editor", action="type", text="hello", clear=True, press_enter=True, wait_for_change=False)
+
+            payload = _parse_task_wrapped_json(result)
+            pyautogui.click.assert_called_with(20, 30, button="left")
+            pyautogui.hotkey.assert_called_with("ctrl", "a")
+            pyautogui.press.assert_called_with("enter")
+            assert payload["interaction"].startswith("Typed 5 chars")
+
+    def test_no_match_returns_structured_payload(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "matches": [],
+                "searched_element_count": 3,
+                "searchable_preview": [{"label": "Inventory"}],
+                "summary": {"control_count": 3, "notes": []},
+                "recommendations": ["Try a broader query."],
+            }
+
+            result = _call_tool("UIAct", query="Missing")
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["status"] == "no-match"
+            assert payload["search"]["searched_element_count"] == 3
+
+    def test_waits_for_semantic_query_after_action(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.side_effect = [
+                {
+                    "window": {"label": "Roblox Studio"},
+                    "matches": [
+                        {
+                            "label": "Inventory",
+                            "class": "Button",
+                            "element_id": "abc123",
+                            "monitor_id": 1,
+                            "center": {"x": 100, "y": 180},
+                            "relative_center": {"x": 50, "y": 80},
+                            "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                            "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
+                        }
+                    ],
+                    "searched_element_count": 2,
+                    "searchable_preview": [{"label": "Inventory"}],
+                    "summary": {"control_count": 1, "notes": []},
+                    "recommendations": [],
+                },
+                {
+                    "matches": [],
+                    "searched_element_count": 3,
+                    "searchable_preview": [{"label": "Loading"}],
+                    "summary": {"control_count": 3, "notes": []},
+                    "recommendations": [],
+                },
+                {
+                    "matches": [
+                        {
+                            "label": "Save Complete",
+                            "class": "Text",
+                            "element_id": "done1",
+                            "match": {"score": 99, "type": "contains", "field": "label", "value": "Save Complete"},
+                        }
+                    ],
+                    "searched_element_count": 4,
+                    "searchable_preview": [{"label": "Save Complete"}],
+                    "summary": {"control_count": 4, "notes": []},
+                    "recommendations": [],
+                },
+            ]
+            mock_desktop.validate_screen_point.return_value = {"monitor_id": 1}
+            mock_desktop.focus_window.return_value = "Focused window"
+            mock_desktop.observe_screen.side_effect = [
+                {"baseline_created": True, "changed": None, "changed_regions": []},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+            ]
+
+            result = _call_tool(
+                "UIAct",
+                query="Inventory",
+                wait_for_query="Save Complete",
+                wait_until="appear",
+                timeout_seconds=1,
+            )
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["status"] == "completed"
+            assert payload["wait_condition"]["satisfied"] is True
+            assert payload["wait_condition"]["target"]["label"] == "Save Complete"
+
+
+class TestUISequence:
+    def test_runs_compact_multistep_flow(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "window": {"label": "Roblox Studio"},
+                "matches": [
+                    {
+                        "label": "Inventory",
+                        "class": "Button",
+                        "element_id": "abc123",
+                        "monitor_id": 1,
+                        "center": {"x": 100, "y": 180},
+                        "relative_center": {"x": 50, "y": 80},
+                        "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                        "match": {"score": 100, "type": "exact", "field": "label", "value": "Inventory"},
+                    }
+                ],
+                "searched_element_count": 2,
+                "searchable_preview": [{"label": "Inventory"}],
+                "summary": {"control_count": 1, "notes": []},
+                "recommendations": [],
+            }
+            mock_desktop.validate_screen_point.return_value = {"monitor_id": 1}
+            mock_desktop.focus_window.return_value = "Focused window"
+            mock_desktop.observe_screen.side_effect = [
+                {"baseline_created": True, "changed": None, "changed_regions": [], "target": {"mode": "window", "window": {"title": "Roblox Studio"}}, "searchable_preview": [], "recommendations": []},
+                {"baseline_created": False, "changed": True, "change_ratio": 0.2, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}], "target": {"mode": "window", "window": {"title": "Roblox Studio"}}, "searchable_preview": [], "recommendations": []},
+                {"baseline_created": False, "changed": True, "change_ratio": 0.2, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}], "target": {"mode": "window", "window": {"title": "Roblox Studio"}}, "searchable_preview": [], "recommendations": []},
+                {"baseline_created": False, "changed": False, "change_ratio": 0.0, "changed_regions": [], "target": {"mode": "window", "window": {"title": "Roblox Studio"}}, "searchable_preview": [{"label": "Inventory"}], "recommendations": []},
+            ]
+
+            result = _call_tool(
+                "UISequence",
+                steps_json='[{"action":"click","query":"Inventory"},{"action":"observe","update_baseline":false}]',
+            )
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["executed_steps"] == 2
+            assert payload["results"][0]["result"]["target"]["label"] == "Inventory"
+            assert payload["results"][0]["result"]["observation_after"]["changed"] is True
+            assert payload["results"][1]["result"]["changed"] is False
+
+    def test_stops_on_no_match_by_default(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "matches": [],
+                "searched_element_count": 3,
+                "searchable_preview": [{"label": "Inventory"}],
+                "summary": {"control_count": 3, "notes": []},
+                "recommendations": ["Try a broader query."],
+            }
+
+            result = _call_tool(
+                "UISequence",
+                steps_json='[{"action":"click","query":"Missing"},{"action":"wait","seconds":0.1}]',
+            )
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["executed_steps"] == 1
+            assert payload["results"][0]["status"] == "no-match"
+
+    def test_waitfor_step_reports_semantic_wait_result(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.side_effect = [
+                {
+                    "matches": [],
+                    "searched_element_count": 3,
+                    "searchable_preview": [{"label": "Loading"}],
+                    "summary": {"control_count": 3, "notes": []},
+                    "recommendations": [],
+                },
+                {
+                    "matches": [
+                        {
+                            "label": "Save Complete",
+                            "class": "Text",
+                            "element_id": "done1",
+                            "match": {"score": 99, "type": "contains", "field": "label", "value": "Save Complete"},
+                        }
+                    ],
+                    "searched_element_count": 4,
+                    "searchable_preview": [{"label": "Save Complete"}],
+                    "summary": {"control_count": 4, "notes": []},
+                    "recommendations": [],
+                },
+            ]
+            mock_desktop.observe_screen.side_effect = [
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+            ]
+
+            result = _call_tool(
+                "UISequence",
+                steps_json='[{"action":"waitfor","query":"Save Complete","timeout_seconds":1}]',
+            )
+
+            payload = _parse_task_wrapped_json(result)
+            assert payload["executed_steps"] == 1
+            assert payload["results"][0]["action"] == "waitfor"
+            assert payload["results"][0]["result"]["satisfied"] is True
+            assert payload["results"][0]["result"]["target"]["label"] == "Save Complete"
+
+
+class TestDesktopObserveScreen:
+    def test_first_observation_creates_baseline(self):
+        desktop._SCREEN_OBSERVE_BASELINES.clear()
+        desktop._UI_MAP_CACHE.clear()
+        metadata = {
+            "bounds": {"left": 0, "top": 0, "right": 60, "bottom": 60, "width": 60, "height": 60},
+            "captured_monitors": [1],
+            "monitors": [{"monitor_id": 1}],
+            "virtual_screen": {"left": 0, "top": 0, "right": 60, "bottom": 60, "width": 60, "height": 60},
+        }
+        mapped = [
+            {
+                "index": 0,
+                "type": "window",
+                "label": "Demo",
+                "window_text": "Demo",
+                "class": "Window",
+                "monitor_id": 1,
+                "center": {"x": 30, "y": 30},
+                "relative_center": {"x": 30, "y": 30},
+                "element_id": "window-1",
+            },
+            {
+                "index": 1,
+                "type": "control",
+                "label": "Play",
+                "window_text": "Play",
+                "class": "Button",
+                "monitor_id": 1,
+                "center": {"x": 20, "y": 20},
+                "relative_center": {"x": 20, "y": 20},
+                "element_id": "control-1",
+            },
+        ]
+
+        with patch("winremote.desktop.capture_image", return_value=(Image.new("RGB", (60, 60), "black"), metadata)), patch(
+            "winremote.desktop.enumerate_windows",
+            return_value=[],
+        ), patch("winremote.desktop.map_ui_elements", return_value=mapped):
+            payload = desktop.observe_screen(reset=True)
+
+        assert payload["baseline_created"] is True
+        assert payload["changed"] is None
+        assert payload["ui_summary"]["control_count"] == 1
+        assert payload["searchable_preview"][0]["label"] == "Play"
+
+    def test_second_observation_reports_changed_regions(self):
+        desktop._SCREEN_OBSERVE_BASELINES.clear()
+        desktop._UI_MAP_CACHE.clear()
+        metadata = {
+            "bounds": {"left": 0, "top": 0, "right": 80, "bottom": 80, "width": 80, "height": 80},
+            "captured_monitors": [1],
+            "monitors": [{"monitor_id": 1}],
+            "virtual_screen": {"left": 0, "top": 0, "right": 80, "bottom": 80, "width": 80, "height": 80},
+        }
+
+        with patch(
+            "winremote.desktop.capture_image",
+            side_effect=[
+                (Image.new("RGB", (80, 80), "black"), metadata),
+                (Image.new("RGB", (80, 80), "white"), metadata),
+            ],
+        ), patch("winremote.desktop.enumerate_windows", return_value=[]), patch(
+            "winremote.desktop.map_ui_elements",
+            return_value=[],
+        ):
+            baseline = desktop.observe_screen(reset=True, grid_size=4)
+            changed = desktop.observe_screen(grid_size=4)
+
+        assert baseline["baseline_created"] is True
+        assert changed["baseline_created"] is False
+        assert changed["changed"] is True
+        assert changed["change_ratio"] > 0
+        assert changed["changed_regions"]
+
+
+class TestDesktopUIMapCache:
+    def setup_method(self):
+        desktop._UI_MAP_CACHE.clear()
+
+    def test_map_ui_elements_reuses_recent_cache(self):
+        mapped = [{"index": 0, "label": "Demo"}]
+
+        with patch("winremote.desktop._map_ui_elements_uncached", return_value=mapped) as mock_uncached:
+            first = desktop.map_ui_elements(window_title="Demo")
+            second = desktop.map_ui_elements(window_title="Demo")
+
+        assert first == mapped
+        assert second == mapped
+        assert mock_uncached.call_count == 1
+
+    def test_invalidate_ui_map_cache_forces_refresh(self):
+        first_map = [{"index": 0, "label": "Demo"}]
+        second_map = [{"index": 0, "label": "Demo 2"}]
+
+        with patch("winremote.desktop._map_ui_elements_uncached", side_effect=[first_map, second_map]) as mock_uncached:
+            first = desktop.map_ui_elements(window_title="Demo")
+            cleared = desktop.invalidate_ui_map_cache("Demo")
+            second = desktop.map_ui_elements(window_title="Demo")
+
+        assert first == first_map
+        assert second == second_map
+        assert cleared >= 1
+        assert mock_uncached.call_count == 2
+
+    def test_observe_screen_refreshes_ui_map_after_detected_change(self):
+        desktop._SCREEN_OBSERVE_BASELINES.clear()
+        metadata = {
+            "bounds": {"left": 0, "top": 0, "right": 80, "bottom": 80, "width": 80, "height": 80},
+            "captured_monitors": [1],
+            "monitors": [{"monitor_id": 1}],
+            "virtual_screen": {"left": 0, "top": 0, "right": 80, "bottom": 80, "width": 80, "height": 80},
+        }
+        first_mapped = [
+            {"index": 0, "type": "window", "label": "Demo", "window_text": "Demo", "class": "Window", "monitor_id": 1, "center": {"x": 40, "y": 40}, "relative_center": {"x": 40, "y": 40}, "element_id": "window-1"},
+            {"index": 1, "type": "control", "label": "Play", "window_text": "Play", "class": "Button", "monitor_id": 1, "center": {"x": 20, "y": 20}, "relative_center": {"x": 20, "y": 20}, "element_id": "control-1"},
+        ]
+        second_mapped = [
+            {"index": 0, "type": "window", "label": "Demo", "window_text": "Demo", "class": "Window", "monitor_id": 1, "center": {"x": 40, "y": 40}, "relative_center": {"x": 40, "y": 40}, "element_id": "window-1"},
+            {"index": 1, "type": "control", "label": "Pause", "window_text": "Pause", "class": "Button", "monitor_id": 1, "center": {"x": 20, "y": 20}, "relative_center": {"x": 20, "y": 20}, "element_id": "control-2"},
+        ]
+
+        with patch(
+            "winremote.desktop.capture_image",
+            side_effect=[
+                (Image.new("RGB", (80, 80), "black"), metadata),
+                (Image.new("RGB", (80, 80), "white"), metadata),
+            ],
+        ), patch("winremote.desktop.enumerate_windows", return_value=[]), patch(
+            "winremote.desktop._map_ui_elements_uncached",
+            side_effect=[first_mapped, second_mapped],
+        ) as mock_uncached:
+            baseline = desktop.observe_screen(reset=True)
+            changed = desktop.observe_screen()
+
+        assert baseline["searchable_preview"][0]["label"] == "Play"
+        assert changed["changed"] is True
+        assert changed["searchable_preview"][0]["label"] == "Pause"
+        assert mock_uncached.call_count == 2

@@ -389,16 +389,19 @@ See [SECURITY.md](SECURITY.md) for the full security guide.
 |------|-------------|
 | **Desktop** | |
 | Snapshot | Screenshot (JPEG, configurable quality/max_width) + window list + UI elements |
+| ObserveScreen | Text-only GUI observation with server-side change detection and changed-region hints |
 | AnnotatedSnapshot | Screenshot with numbered labels on interactive elements |
 | UIMap | Map window/panel/button coordinates (x,y and bounding boxes), optional OCR per element |
 | UIMapJson | Structured JSON version of UIMap for automation-friendly coordinate extraction |
 | UIFind | Find UI elements by label/class/OCR text and return ranked matches |
 | UIClick | Click a UI element by semantic query instead of raw coordinates |
+| UIAct | Find, act, and wait for GUI change in one server-side round trip |
+| UISequence | Run a compact multi-step GUI workflow server-side in one response |
 | UIWatch | Diff UI layouts between snapshots to detect added, removed, moved, or changed controls |
 | OCR | Extract text from screen via OCR (pytesseract or Windows built-in) |
 | ScreenRecord | Record screen activity as animated GIF |
 
-All screen/UI tools use **virtual-screen coordinates** across all monitors. Structured payloads now include monitor metadata, virtual-screen bounds, and both absolute (`center`, `rect`) and window-relative (`relative_center`, `relative_rect`) coordinates.
+All screen/UI tools use **virtual-screen coordinates** across all monitors. Structured payloads now include monitor metadata, virtual-screen bounds, and both absolute (`center`, `rect`) and window-relative (`relative_center`, `relative_rect`) coordinates. For screenshot-light workflows, start with `ObserveScreen`, `UIFind`, and `UIWatch`, use `UIAct` for single semantic actions or semantic waits (for example, waiting for a label to appear/disappear), or use `UISequence` to execute a short multi-step GUI routine server-side and return one compact summary. Fall back to `Snapshot` or `AnnotatedSnapshot` only when visual pixels are truly needed.
 | **Input** | |
 | Click | Mouse click (left/right/middle, single/double/hover) |
 | Type | Type text at coordinates |

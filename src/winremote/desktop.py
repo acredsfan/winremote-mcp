@@ -8,6 +8,7 @@ import hashlib
 import io
 import locale
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -25,9 +26,12 @@ try:
 except ImportError:
     HAS_WIN32 = False
 
-from PIL import ImageGrab
+from PIL import Image, ImageGrab
 
 _UI_WATCH_BASELINES: dict[str, list[dict]] = {}
+_SCREEN_OBSERVE_BASELINES: dict[str, dict] = {}
+_UI_MAP_CACHE: dict[str, dict[str, Any]] = {}
+_UI_MAP_CACHE_TTL_SECONDS = 0.75
 
 # Enable DPI awareness so screenshots capture native resolution (e.g. 4K)
 try:
@@ -389,7 +393,41 @@ def _find_window_by_title(title: str) -> WindowInfo | None:
     return None
 
 
-def map_ui_elements(
+def _ui_map_cache_key(
+    window_title: str,
+    include_text: bool,
+    max_elements: int,
+    min_width: int,
+    min_height: int,
+) -> str:
+    """Build a stable cache key for mapped UI trees."""
+    return "|".join(
+        [
+            window_title.strip().lower() or "__foreground__",
+            "1" if include_text else "0",
+            str(max_elements),
+            str(min_width),
+            str(min_height),
+        ]
+    )
+
+
+def invalidate_ui_map_cache(window_title: str = "") -> int:
+    """Invalidate cached UI maps for a specific window title or all maps."""
+    if not window_title:
+        cleared = len(_UI_MAP_CACHE)
+        _UI_MAP_CACHE.clear()
+        return cleared
+
+    normalized = window_title.strip().lower()
+    aliases = {normalized, "__foreground__"}
+    keys_to_remove = [key for key in list(_UI_MAP_CACHE) if key.split("|", 1)[0] in aliases]
+    for key in keys_to_remove:
+        _UI_MAP_CACHE.pop(key, None)
+    return len(keys_to_remove)
+
+
+def _map_ui_elements_uncached(
     window_title: str = "",
     include_text: bool = False,
     max_elements: int = 100,
@@ -546,6 +584,36 @@ def map_ui_elements(
     return results
 
 
+def map_ui_elements(
+    window_title: str = "",
+    include_text: bool = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    *,
+    use_cache: bool = True,
+) -> list[dict]:
+    """Map UI elements and cache recent results for short-lived repeated lookups."""
+    cache_key = _ui_map_cache_key(window_title, include_text, max_elements, min_width, min_height)
+    if use_cache:
+        cached = _UI_MAP_CACHE.get(cache_key)
+        if cached is not None and (time.monotonic() - cached.get("created_at", 0.0)) <= _UI_MAP_CACHE_TTL_SECONDS:
+            return cached["mapped"]
+
+    mapped = _map_ui_elements_uncached(
+        window_title=window_title,
+        include_text=include_text,
+        max_elements=max_elements,
+        min_width=min_width,
+        min_height=min_height,
+    )
+    _UI_MAP_CACHE[cache_key] = {
+        "created_at": time.monotonic(),
+        "mapped": mapped,
+    }
+    return mapped
+
+
 def _normalize_search_text(value: str | None) -> str:
     """Normalize UI text for matching."""
     if not value:
@@ -691,6 +759,7 @@ def find_ui_elements(
     max_elements: int = 100,
     min_width: int = 4,
     min_height: int = 4,
+    use_cache: bool = True,
 ) -> list[dict]:
     """Find best matching UI elements for a text/class query.
 
@@ -705,6 +774,7 @@ def find_ui_elements(
         max_elements=max_elements,
         min_width=min_width,
         min_height=min_height,
+        use_cache=use_cache,
     )["matches"]
 
 
@@ -717,6 +787,7 @@ def find_ui_elements_with_context(
     max_elements: int = 100,
     min_width: int = 4,
     min_height: int = 4,
+    use_cache: bool = True,
 ) -> dict:
     """Find UI matches and include diagnostics about the search space."""
     query = (query or "").strip()
@@ -732,6 +803,7 @@ def find_ui_elements_with_context(
         max_elements=max_elements,
         min_width=min_width,
         min_height=min_height,
+        use_cache=use_cache,
     )
     elements = mapped
     q_norm = _normalize_search_text(query)
@@ -994,6 +1066,330 @@ def watch_ui_elements(
         "previous_count": max(0, len(previous) - 1),
         "current_count": max(0, len(current) - 1),
         "diff": diff,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Text-first screen observation
+# ---------------------------------------------------------------------------
+
+
+def _serialize_window_info(window: WindowInfo) -> dict:
+    """Convert WindowInfo to a JSON-friendly payload."""
+    return {
+        "handle": window.handle,
+        "title": window.title,
+        "rect": {
+            "left": window.rect[0],
+            "top": window.rect[1],
+            "right": window.rect[2],
+            "bottom": window.rect[3],
+        },
+        "size": {"width": window.width, "height": window.height},
+        "visible": window.visible,
+        "pid": window.pid,
+        "process_name": window.process_name,
+        "monitor_id": window.monitor_id,
+    }
+
+
+def _observe_screen_key(
+    *,
+    mode: str,
+    bounds: dict,
+    monitor: int,
+    window_title: str,
+    include_text: bool,
+    grid_size: int,
+) -> str:
+    """Build a cache key for text-only screen observation baselines."""
+    return "|".join(
+        [
+            mode,
+            str(monitor),
+            window_title.strip().lower() or "__none__",
+            "1" if include_text else "0",
+            str(grid_size),
+            str(bounds.get("left", 0)),
+            str(bounds.get("top", 0)),
+            str(bounds.get("right", 0)),
+            str(bounds.get("bottom", 0)),
+        ]
+    )
+
+
+def _build_screen_digest(img: Any, *, grid_size: int = 6) -> dict:
+    """Return a compact grayscale digest for change detection without returning pixels."""
+    grid_size = max(1, min(int(grid_size), 12))
+    gray = img.convert("L")
+    sample_width = max(48, grid_size * 16)
+    if gray.width > sample_width:
+        sample_height = max(16, int(gray.height * (sample_width / gray.width)))
+        resampling = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
+        sample = gray.resize((sample_width, sample_height), resample=resampling)
+    else:
+        sample = gray.copy()
+
+    sample_bytes = sample.tobytes()
+    overall_digest = hashlib.sha1(sample_bytes).hexdigest()[:16]
+
+    cols = max(1, min(grid_size, sample.width))
+    rows = max(1, min(grid_size, max(1, round(sample.height * cols / max(sample.width, 1)))))
+
+    tile_digests: list[str] = []
+    tile_brightness: list[float] = []
+    for row in range(rows):
+        for col in range(cols):
+            x1 = int(col * sample.width / cols)
+            y1 = int(row * sample.height / rows)
+            x2 = int((col + 1) * sample.width / cols)
+            y2 = int((row + 1) * sample.height / rows)
+            tile = sample.crop((x1, y1, x2, y2))
+            tile_bytes = tile.tobytes()
+            tile_digests.append(hashlib.sha1(tile_bytes).hexdigest()[:12])
+            pixels = list(tile.getdata())
+            tile_brightness.append(round(sum(pixels) / max(1, len(pixels)), 2))
+
+    return {
+        "digest": overall_digest,
+        "sample_size": {"width": sample.width, "height": sample.height},
+        "grid": {"columns": cols, "rows": rows},
+        "tile_digests": tile_digests,
+        "tile_brightness": tile_brightness,
+    }
+
+
+def _cluster_changed_tiles(changed_indices: list[int], columns: int) -> list[list[tuple[int, int]]]:
+    """Group adjacent changed tiles into larger regions."""
+    remaining = {(idx // columns, idx % columns) for idx in changed_indices}
+    clusters: list[list[tuple[int, int]]] = []
+
+    while remaining:
+        start = remaining.pop()
+        stack = [start]
+        cluster = [start]
+        while stack:
+            row, col = stack.pop()
+            for delta_row, delta_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbor = (row + delta_row, col + delta_col)
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    stack.append(neighbor)
+                    cluster.append(neighbor)
+        clusters.append(cluster)
+
+    return clusters
+
+
+def _changed_regions_from_tiles(
+    changed_indices: list[int],
+    *,
+    columns: int,
+    rows: int,
+    bounds: dict,
+) -> list[dict]:
+    """Project changed tile clusters back into screen coordinates."""
+    if not changed_indices:
+        return []
+
+    regions: list[dict] = []
+    for cluster in _cluster_changed_tiles(changed_indices, columns):
+        min_row = min(row for row, _col in cluster)
+        max_row = max(row for row, _col in cluster)
+        min_col = min(col for _row, col in cluster)
+        max_col = max(col for _row, col in cluster)
+
+        left = bounds["left"] + int(min_col * bounds["width"] / columns)
+        right = bounds["left"] + int((max_col + 1) * bounds["width"] / columns)
+        top = bounds["top"] + int(min_row * bounds["height"] / rows)
+        bottom = bounds["top"] + int((max_row + 1) * bounds["height"] / rows)
+        regions.append(
+            {
+                "left": left,
+                "top": top,
+                "right": right,
+                "bottom": bottom,
+                "width": max(1, right - left),
+                "height": max(1, bottom - top),
+                "tile_count": len(cluster),
+            }
+        )
+
+    regions.sort(key=lambda item: (-item["tile_count"], item["top"], item["left"]))
+    return regions[:8]
+
+
+def observe_screen(
+    window_title: str = "",
+    include_text: bool = False,
+    monitor: int = 0,
+    left: int | None = None,
+    top: int | None = None,
+    right: int | None = None,
+    bottom: int | None = None,
+    max_elements: int = 40,
+    min_width: int = 4,
+    min_height: int = 4,
+    grid_size: int = 6,
+    reset: bool = False,
+    update_baseline: bool = True,
+    window_limit: int = 20,
+) -> dict:
+    """Observe the GUI without returning screenshots.
+
+    Captures a tiny in-memory digest, compares it against a cached baseline,
+    and returns structured UI/window context plus changed screen regions.
+    """
+    region_requested = any(v is not None for v in (left, top, right, bottom))
+    if region_requested and not all(v is not None for v in (left, top, right, bottom)):
+        raise ValueError("left, top, right, and bottom must all be provided together")
+
+    target_mode = "all_screens"
+    target_window: WindowInfo | None = None
+    capture_kwargs: dict[str, int] = {}
+
+    if window_title:
+        target_window = _find_window_by_title(window_title)
+        if target_window is None:
+            raise ValueError(f"No window matching '{window_title}'")
+        target_mode = "window"
+        capture_kwargs = {
+            "left": target_window.rect[0],
+            "top": target_window.rect[1],
+            "right": target_window.rect[2],
+            "bottom": target_window.rect[3],
+        }
+    elif region_requested:
+        assert left is not None and top is not None and right is not None and bottom is not None
+        target_mode = "region"
+        capture_kwargs = {
+            "left": int(left),
+            "top": int(top),
+            "right": int(right),
+            "bottom": int(bottom),
+        }
+    elif monitor > 0:
+        target_mode = "monitor"
+        capture_kwargs = {"monitor": monitor}
+
+    img, metadata = capture_image(**capture_kwargs)
+    bounds = metadata["bounds"]
+    digest = _build_screen_digest(img, grid_size=grid_size)
+
+    previous = None
+    key = _observe_screen_key(
+        mode=target_mode,
+        bounds=bounds,
+        monitor=monitor,
+        window_title=target_window.title if target_window else window_title,
+        include_text=include_text,
+        grid_size=digest["grid"]["columns"],
+    )
+    if not reset:
+        previous = _SCREEN_OBSERVE_BASELINES.get(key)
+
+    baseline_created = reset or previous is None
+    changed = None
+    change_ratio = None
+    changed_tile_indices: list[int] = []
+    changed_regions: list[dict] = []
+
+    if previous is not None and previous.get("digest") != digest["digest"]:
+        prev_tiles = previous.get("tile_digests") or []
+        curr_tiles = digest["tile_digests"]
+        if len(prev_tiles) != len(curr_tiles):
+            changed_tile_indices = list(range(len(curr_tiles)))
+        else:
+            changed_tile_indices = [
+                index for index, tile_digest in enumerate(curr_tiles) if tile_digest != prev_tiles[index]
+            ]
+        changed = bool(changed_tile_indices)
+        change_ratio = round(len(changed_tile_indices) / max(1, len(curr_tiles)), 4)
+        changed_regions = _changed_regions_from_tiles(
+            changed_tile_indices,
+            columns=digest["grid"]["columns"],
+            rows=digest["grid"]["rows"],
+            bounds=bounds,
+        )
+        invalidate_ui_map_cache(target_window.title if target_window else window_title)
+    elif previous is not None:
+        changed = False
+        change_ratio = 0.0
+
+    if update_baseline:
+        _SCREEN_OBSERVE_BASELINES[key] = {
+            "digest": digest["digest"],
+            "tile_digests": list(digest["tile_digests"]),
+            "grid": dict(digest["grid"]),
+            "bounds": dict(bounds),
+        }
+
+    windows = enumerate_windows() if HAS_WIN32 else []
+    windows_payload = [_serialize_window_info(window) for window in windows[:window_limit]]
+
+    mapped: list[dict] = []
+    ui_scope = None
+    if HAS_WIN32 and target_mode != "region":
+        try:
+            mapped = map_ui_elements(
+                window_title=target_window.title if target_window else window_title,
+                include_text=include_text,
+                max_elements=max_elements,
+                min_width=min_width,
+                min_height=min_height,
+                use_cache=not bool(changed),
+            )
+            ui_scope = "target_window" if (target_window or window_title) else "foreground_window"
+        except Exception:
+            mapped = []
+
+    ui_summary = summarize_ui_map(mapped) if mapped else None
+    searchable_preview = (ui_summary or {}).get("searchable_preview", []) if ui_summary else []
+
+    recommendations: list[str] = []
+    if baseline_created:
+        recommendations.append(
+            "Baseline created. Repeat ObserveScreen after an action to learn whether the GUI changed without attaching a screenshot."
+        )
+    elif changed is False:
+        recommendations.append(
+            "No screen change detected. Reuse the prior UI understanding or coordinates instead of requesting another screenshot."
+        )
+    else:
+        recommendations.append(
+            "Screen change detected. If you need pixels, request OCR or Snapshot only for one changed region instead of the full desktop."
+        )
+    if searchable_preview:
+        recommendations.append(
+            "Try UIFind or UIClick with labels from searchable_preview before falling back to AnnotatedSnapshot."
+        )
+    if ui_summary and ui_summary.get("notes"):
+        recommendations.extend(ui_summary["notes"])
+
+    return {
+        "target": {
+            "mode": target_mode,
+            "window": _serialize_window_info(target_window) if target_window else None,
+            "bounds": bounds,
+            "captured_monitors": metadata.get("captured_monitors", []),
+        },
+        "baseline_created": baseline_created,
+        "baseline_reset": bool(reset),
+        "changed": changed,
+        "change_ratio": change_ratio,
+        "changed_tiles": len(changed_tile_indices),
+        "changed_regions": changed_regions,
+        "screen_digest": digest["digest"],
+        "grid": digest["grid"],
+        "sample_size": digest["sample_size"],
+        "window_count": len(windows),
+        "windows": windows_payload,
+        "ui_scope": ui_scope,
+        "ui_summary": ui_summary,
+        "searchable_preview": searchable_preview,
+        "monitors": metadata.get("monitors", []),
+        "virtual_screen": metadata.get("virtual_screen"),
+        "recommendations": recommendations,
     }
 
 

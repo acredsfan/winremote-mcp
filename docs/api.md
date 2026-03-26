@@ -31,6 +31,121 @@ Capture screenshot with optional compression and window information.
 }
 ```
 
+### ObserveScreen
+Observe the GUI without attaching a screenshot to the chat.
+
+This tool captures a tiny in-memory digest, compares it with the previous digest
+for the same window/monitor/region, and returns structured JSON describing:
+
+- whether the screen changed
+- approximate changed regions
+- likely click-target labels from the mapped UI
+- recommendations for the next low-bandwidth step
+
+**Parameters:**
+- `window_title` (str, optional): Target a specific window by fuzzy title match
+- `include_text` (bool): Include OCR text in mapped controls when available
+- `monitor` (int): Monitor number, default 0 for all monitors
+- `left`, `top`, `right`, `bottom` (int, optional): Observe a specific region
+- `grid_size` (int): Digest grid density, default 6
+- `reset` (bool): Reset the baseline for this target
+- `update_baseline` (bool): Store the current digest as the new baseline
+
+**Returns:**
+- JSON payload with `changed`, `change_ratio`, `changed_regions`, `ui_summary`, and `searchable_preview`
+- no image payload
+
+**Example:**
+```json
+{
+  "tool": "ObserveScreen",
+  "arguments": {
+    "window_title": "Roblox Studio",
+    "grid_size": 6,
+    "include_text": true
+  }
+}
+```
+
+### UIAct
+Find a UI element, perform an action, and optionally wait for GUI change.
+
+This tool keeps the interaction loop inside the server so the agent does not
+need a screenshot-heavy multi-turn chat cycle for each micro-step.
+
+**Parameters:**
+- `query` (str): Label/class/text query for the target element
+- `window_title` (str, optional): Target window title
+- `action` (str): `click`, `double`, `hover`, `right_click`, or `type`
+- `text` (str, optional): Text to type when `action="type"`
+- `clear` (bool): Clear existing text before typing
+- `press_enter` (bool): Press Enter after typing
+- `wait_for_change` (bool): Observe whether the GUI changed after the action
+- `wait_for_query` (str, optional): Semantic query to wait for after the action
+- `wait_match_mode` (str): Match mode for `wait_for_query`, default `auto`
+- `wait_until` (str): Whether the semantic query should `appear` or `disappear`
+- `timeout_seconds` (float): How long to wait for change detection
+- `poll_interval` (float): Poll interval for change detection
+
+**Returns:**
+- JSON payload with the matched target, interaction summary, search diagnostics,
+  pre/post observation snapshots (text-only), and optional semantic wait results
+
+**Example:**
+```json
+{
+  "tool": "UIAct",
+  "arguments": {
+    "window_title": "Roblox Studio",
+    "query": "Inventory",
+    "action": "click",
+    "wait_for_change": true,
+    "wait_for_query": "Save Complete",
+    "wait_until": "appear"
+  }
+}
+```
+
+### UISequence
+Run a compact multi-step GUI workflow server-side.
+
+This is the lowest-overhead option for repetitive GUI work in chat because the
+agent can submit several steps at once and receive one summarized JSON payload.
+
+**Parameters:**
+- `steps_json` (str): JSON list of steps or `{ "steps": [...] }`
+- `window_title` (str, optional): Default window for steps that omit one
+- `compact` (bool): Return compact per-step summaries (default true)
+- `continue_on_error` (bool): Continue after step errors or no-match results
+
+**Supported step actions:**
+- `click`
+- `double`
+- `hover`
+- `right_click`
+- `type`
+- `observe`
+- `wait`
+- `waitfor`
+- `shortcut`
+
+For `waitfor`, provide:
+- `query` (str): semantic query to watch for
+- `wait_until` (str): `appear` or `disappear`
+- `timeout_seconds` (float): max wait time
+- `poll_interval` (float): poll interval
+
+**Example:**
+```json
+{
+  "tool": "UISequence",
+  "arguments": {
+    "window_title": "Roblox Studio",
+    "steps_json": "[{\"action\":\"click\",\"query\":\"Inventory\"},{\"action\":\"waitfor\",\"query\":\"Save Complete\",\"wait_until\":\"appear\"}]"
+  }
+}
+```
+
 ### Click
 Perform mouse clicks at specified coordinates.
 

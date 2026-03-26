@@ -4,6 +4,7 @@ import pytest
 
 from winremote.config import discover_config_path, load_config
 from winremote.security import parse_ip_allowlist
+from winremote.taskmanager import TOOL_CATEGORIES, ToolCategory
 from winremote.tiers import resolve_enabled_tools
 
 
@@ -88,3 +89,9 @@ def test_ip_allowlist_parsing():
 def test_ip_allowlist_invalid():
     with pytest.raises(ValueError):
         parse_ip_allowlist(["not-an-ip"])
+
+
+def test_new_ui_tools_are_desktop_category():
+    assert TOOL_CATEGORIES["ObserveScreen"] == ToolCategory.DESKTOP
+    assert TOOL_CATEGORIES["UIAct"] == ToolCategory.DESKTOP
+    assert TOOL_CATEGORIES["UISequence"] == ToolCategory.DESKTOP

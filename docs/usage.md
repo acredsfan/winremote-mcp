@@ -170,6 +170,17 @@ Create/edit `.cursor/mcp.json` in your project:
 # Annotated screenshot
 "Take an annotated screenshot showing numbered labels on all clickable elements"
 
+# Text-only observation before asking for pixels
+"Observe Roblox Studio without taking a screenshot and tell me whether anything changed"
+"Observe the current GUI, then suggest the next low-bandwidth tool to use"
+"Click the Inventory button in Roblox Studio and wait to see if the UI changes, without taking a screenshot"
+"Click Save and wait until the text 'Save Complete' appears, without taking screenshots"
+"Wait until the loading spinner disappears using a semantic query instead of repeated screenshots"
+"Type 'hello' into the Notepad editor and tell me whether the window changed"
+"Run a two-step GUI workflow: click Inventory, then observe the window, and return one compact result"
+"Run a compact GUI workflow: click Save, wait for 'Save Complete', then observe"
+"Execute a short multi-step GUI routine server-side instead of narrating each click"
+
 # UI coordinate mapping for buttons/panels
 "Map all UI element coordinates for the current foreground window"
 "Map Roblox Studio UI coordinates and include OCR text"

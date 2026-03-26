@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import platform
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import click
 import pyautogui
@@ -1734,6 +1736,393 @@ def UIClick(
         return f"UIClick error: {e}"
 
 
+def _compact_observation_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a compact observation summary suitable for low-overhead chat flows."""
+    if payload is None:
+        return None
+    return {
+        "target": {
+            "mode": ((payload.get("target") or {}).get("mode")),
+            "window_title": (((payload.get("target") or {}).get("window") or {}).get("title")),
+        },
+        "changed": payload.get("changed"),
+        "change_ratio": payload.get("change_ratio"),
+        "changed_regions": (payload.get("changed_regions") or [])[:3],
+        "searchable_preview": (payload.get("searchable_preview") or [])[:5],
+        "recommendations": (payload.get("recommendations") or [])[:2],
+    }
+
+
+def _compact_wait_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a compact semantic-wait summary for low-overhead chat flows."""
+    if payload is None:
+        return None
+    return {
+        "query": payload.get("query"),
+        "wait_until": payload.get("wait_until"),
+        "satisfied": payload.get("satisfied"),
+        "timed_out": payload.get("timed_out"),
+        "target": payload.get("target"),
+        "searched_element_count": payload.get("searched_element_count"),
+        "searchable_preview": (payload.get("searchable_preview") or [])[:5],
+        "recommendations": (payload.get("recommendations") or [])[:2],
+        "observation_after": _compact_observation_payload(payload.get("observation_after")),
+    }
+
+
+def _normalize_wait_until(wait_until: str) -> str:
+    """Normalize a semantic wait mode."""
+    value = str(wait_until or "appear").strip().lower()
+    aliases = {
+        "appear": "appear",
+        "present": "appear",
+        "exists": "appear",
+        "visible": "appear",
+        "show": "appear",
+        "shown": "appear",
+        "disappear": "disappear",
+        "absent": "disappear",
+        "missing": "disappear",
+        "gone": "disappear",
+        "hide": "disappear",
+        "hidden": "disappear",
+    }
+    normalized = aliases.get(value)
+    if normalized is None:
+        raise ValueError("wait_until must be one of: appear, disappear")
+    return normalized
+
+
+def _wait_for_ui_query(
+    *,
+    query: str,
+    window_title: str = "",
+    include_text: bool = False,
+    match_mode: str = "auto",
+    wait_until: str = "appear",
+    timeout_seconds: float = 2.0,
+    poll_interval: float = 0.25,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    grid_size: int = 6,
+) -> dict[str, Any]:
+    """Wait for a semantic UI query to appear or disappear with minimal overhead."""
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("wait_for_query requires a non-empty query")
+
+    wait_until = _normalize_wait_until(wait_until)
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    poll_interval = max(0.05, float(poll_interval))
+
+    def _search(*, use_cache: bool) -> dict[str, Any]:
+        return desktop.find_ui_elements_with_context(
+            query=query,
+            window_title=window_title,
+            include_text=include_text,
+            max_results=1,
+            match_mode=match_mode,
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            use_cache=use_cache,
+        )
+
+    desktop.invalidate_ui_map_cache(window_title)
+    search_result = _search(use_cache=False)
+    matches = search_result.get("matches") or []
+
+    def _is_satisfied(found_matches: list[dict[str, Any]]) -> bool:
+        is_present = bool(found_matches)
+        return is_present if wait_until == "appear" else not is_present
+
+    observation_after = None
+    if _is_satisfied(matches):
+        observation_after = desktop.observe_screen(
+            window_title=window_title,
+            include_text=include_text,
+            max_elements=min(max_elements, 40),
+            min_width=min_width,
+            min_height=min_height,
+            grid_size=grid_size,
+            reset=False,
+            update_baseline=True,
+        )
+        return {
+            "query": query,
+            "wait_until": wait_until,
+            "satisfied": True,
+            "timed_out": False,
+            "status": "completed",
+            "target": {
+                "label": ((matches[0] if matches else {}).get("label")),
+                "class": ((matches[0] if matches else {}).get("class")),
+                "element_id": ((matches[0] if matches else {}).get("element_id")),
+                "match": ((matches[0] if matches else {}).get("match")),
+            } if matches else None,
+            "searched_element_count": search_result.get("searched_element_count", 0),
+            "searchable_preview": search_result.get("searchable_preview", []),
+            "summary": search_result.get("summary"),
+            "recommendations": search_result.get("recommendations", []),
+            "observation_after": observation_after,
+        }
+
+    deadline = time.monotonic() + timeout_seconds
+    last_observation = None
+    timed_out = False
+    while True:
+        last_observation = desktop.observe_screen(
+            window_title=window_title,
+            include_text=include_text,
+            max_elements=min(max_elements, 40),
+            min_width=min_width,
+            min_height=min_height,
+            grid_size=grid_size,
+            reset=False,
+            update_baseline=False,
+        )
+
+        should_refresh = bool(last_observation.get("changed"))
+        if should_refresh:
+            desktop.invalidate_ui_map_cache(window_title)
+            search_result = _search(use_cache=False)
+            matches = search_result.get("matches") or []
+            if _is_satisfied(matches):
+                break
+
+        if time.monotonic() >= deadline:
+            timed_out = True
+            desktop.invalidate_ui_map_cache(window_title)
+            search_result = _search(use_cache=False)
+            matches = search_result.get("matches") or []
+            break
+
+        time.sleep(poll_interval)
+
+    observation_after = desktop.observe_screen(
+        window_title=window_title,
+        include_text=include_text,
+        max_elements=min(max_elements, 40),
+        min_width=min_width,
+        min_height=min_height,
+        grid_size=grid_size,
+        reset=False,
+        update_baseline=True,
+    )
+    satisfied = _is_satisfied(matches)
+    return {
+        "query": query,
+        "wait_until": wait_until,
+        "satisfied": satisfied,
+        "timed_out": timed_out and not satisfied,
+        "status": "completed" if satisfied else "timeout",
+        "target": {
+            "label": ((matches[0] if matches else {}).get("label")),
+            "class": ((matches[0] if matches else {}).get("class")),
+            "element_id": ((matches[0] if matches else {}).get("element_id")),
+            "match": ((matches[0] if matches else {}).get("match")),
+        } if matches else None,
+        "searched_element_count": search_result.get("searched_element_count", 0),
+        "searchable_preview": search_result.get("searchable_preview", []),
+        "summary": search_result.get("summary"),
+        "recommendations": search_result.get("recommendations", []),
+        "observation_after": observation_after,
+    }
+
+
+def _run_ui_action(
+    *,
+    query: str,
+    window_title: str = "",
+    include_text: bool = False,
+    match_mode: str = "auto",
+    button: str = "left",
+    action: str = "click",
+    text: str = "",
+    clear: bool = False,
+    press_enter: bool = False,
+    wait_for_change: bool = True,
+    wait_for_query: str = "",
+    wait_match_mode: str = "auto",
+    wait_until: str = "appear",
+    timeout_seconds: float = 2.0,
+    poll_interval: float = 0.25,
+    focus_window: bool = True,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    grid_size: int = 6,
+) -> dict[str, Any]:
+    """Shared implementation for UIAct and UISequence."""
+    query = (query or "").strip()
+    if not query:
+        return {"status": "error", "error": "query is required"}
+
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    poll_interval = max(0.05, float(poll_interval))
+    wait_for_query = (wait_for_query or "").strip()
+
+    search_result = desktop.find_ui_elements_with_context(
+        query=query,
+        window_title=window_title,
+        include_text=include_text,
+        max_results=1,
+        match_mode=match_mode,
+        max_elements=max_elements,
+        min_width=min_width,
+        min_height=min_height,
+    )
+    matches = search_result.get("matches") or []
+    if not matches:
+        return {
+            "query": query,
+            "window_title": window_title or None,
+            "status": "no-match",
+            "action": action,
+            "search": {
+                "searched_element_count": search_result.get("searched_element_count", 0),
+                "searchable_preview": search_result.get("searchable_preview", []),
+                "summary": search_result.get("summary"),
+                "recommendations": search_result.get("recommendations", []),
+            },
+        }
+
+    target = matches[0]
+    center = target["center"]
+    x = center["x"]
+    y = center["y"]
+    desktop.validate_screen_point(x, y)
+
+    target_window_title = window_title or ((search_result.get("window") or {}).get("label") or "")
+    focus_result = None
+    if focus_window and target_window_title:
+        focus_result = desktop.focus_window(title=target_window_title)
+        time.sleep(0.1)
+
+    should_wait = wait_for_change or bool(wait_for_query)
+
+    observation_before = desktop.observe_screen(
+        window_title=target_window_title,
+        include_text=include_text,
+        max_elements=min(max_elements, 40),
+        min_width=min_width,
+        min_height=min_height,
+        grid_size=grid_size,
+        reset=True,
+        update_baseline=True,
+    ) if should_wait else None
+
+    pyautogui.moveTo(x, y)
+    interaction_summary = None
+    if action == "hover":
+        interaction_summary = f"Hovered '{target.get('label') or target.get('class') or query}'"
+    elif action == "double":
+        pyautogui.doubleClick(x, y, button=button)
+        interaction_summary = f"Double-clicked {button} on '{target.get('label') or target.get('class') or query}'"
+    elif action == "right_click":
+        pyautogui.click(x, y, button="right")
+        interaction_summary = f"Right-clicked '{target.get('label') or target.get('class') or query}'"
+    elif action == "type":
+        pyautogui.click(x, y, button=button)
+        time.sleep(0.1)
+        if clear:
+            pyautogui.hotkey("ctrl", "a")
+            pyautogui.press("delete")
+            time.sleep(0.05)
+        if text:
+            pyautogui.typewrite(text, interval=0.02) if text.isascii() else pyautogui.write(text)
+        if press_enter:
+            pyautogui.press("enter")
+        interaction_summary = f"Typed {len(text)} chars into '{target.get('label') or target.get('class') or query}'"
+    else:
+        pyautogui.click(x, y, button=button)
+        interaction_summary = f"Clicked {button} on '{target.get('label') or target.get('class') or query}'"
+
+    desktop.invalidate_ui_map_cache(target_window_title)
+
+    observation_after = None
+    wait_condition = None
+    if wait_for_query:
+        wait_condition = _wait_for_ui_query(
+            query=wait_for_query,
+            window_title=target_window_title,
+            include_text=include_text,
+            match_mode=wait_match_mode,
+            wait_until=wait_until,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            grid_size=grid_size,
+        )
+        observation_after = wait_condition.get("observation_after")
+    elif wait_for_change:
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            observation_after = desktop.observe_screen(
+                window_title=target_window_title,
+                include_text=include_text,
+                max_elements=min(max_elements, 40),
+                min_width=min_width,
+                min_height=min_height,
+                grid_size=grid_size,
+                reset=False,
+                update_baseline=False,
+            )
+            if observation_after.get("changed"):
+                desktop.invalidate_ui_map_cache(target_window_title)
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(poll_interval)
+
+        if observation_after is not None:
+            desktop.observe_screen(
+                window_title=target_window_title,
+                include_text=include_text,
+                max_elements=min(max_elements, 40),
+                min_width=min_width,
+                min_height=min_height,
+                grid_size=grid_size,
+                reset=False,
+                update_baseline=True,
+            )
+
+    payload: dict[str, Any] = {
+        "query": query,
+        "window_title": target_window_title or None,
+        "status": "completed",
+        "action": action,
+        "button": button,
+        "interaction": interaction_summary,
+        "focus_result": focus_result,
+        "target": {
+            "label": target.get("label"),
+            "class": target.get("class"),
+            "element_id": target.get("element_id"),
+            "monitor_id": target.get("monitor_id", 0),
+            "center": target.get("center"),
+            "relative_center": target.get("relative_center"),
+            "rect": target.get("rect"),
+            "match": target.get("match"),
+        },
+        "search": {
+            "searched_element_count": search_result.get("searched_element_count", 0),
+            "searchable_preview": search_result.get("searchable_preview", []),
+            "summary": search_result.get("summary"),
+            "recommendations": search_result.get("recommendations", []),
+        },
+        "observation_before": observation_before,
+        "observation_after": observation_after,
+        "wait_for_change": wait_for_change,
+        "wait_condition": wait_condition,
+    }
+    payload["coordinate_spaces"] = _ui_coordinate_spaces()
+    return payload
+
+
 @mcp.tool(
     annotations=ToolAnnotations(
         title="UIWatch",
@@ -1759,8 +2148,6 @@ def UIWatch(
     if err:
         return err
     try:
-        import json
-
         payload = desktop.watch_ui_elements(
             window_title=window_title,
             include_text=_tobool(include_text),
@@ -1775,6 +2162,321 @@ def UIWatch(
         return json.dumps(payload, indent=2)
     except Exception as e:
         return f"UIWatch error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ObserveScreen",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ObserveScreen(
+    window_title: str = "",
+    include_text: bool | str = False,
+    monitor: int = 0,
+    left: int = 0,
+    top: int = 0,
+    right: int = 0,
+    bottom: int = 0,
+    max_elements: int = 40,
+    min_width: int = 4,
+    min_height: int = 4,
+    grid_size: int = 6,
+    reset: bool | str = False,
+    update_baseline: bool | str = True,
+) -> str:
+    """Observe the GUI without attaching a screenshot to chat.
+
+    Captures a tiny in-memory digest, compares it to the prior digest for the
+    same target, and returns text/JSON describing whether the screen changed,
+    where it changed, and which UI elements are likely relevant.
+    """
+    err = _check_win32("ObserveScreen")
+    if err:
+        return err
+    try:
+        region = {}
+        if left or top or right or bottom:
+            left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
+            region = {"left": left, "top": top, "right": right, "bottom": bottom}
+
+        observation_payload = desktop.observe_screen(
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            monitor=monitor,
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            grid_size=grid_size,
+            reset=_tobool(reset),
+            update_baseline=_tobool(update_baseline),
+            **region,
+        )
+        observation_payload["coordinate_spaces"] = _ui_coordinate_spaces()
+        return json.dumps(observation_payload, indent=2)
+    except Exception as e:
+        return f"ObserveScreen error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UIAct",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def UIAct(
+    query: str,
+    window_title: str = "",
+    include_text: bool | str = False,
+    match_mode: str = "auto",
+    button: str = "left",
+    action: str = "click",
+    text: str = "",
+    clear: bool | str = False,
+    press_enter: bool | str = False,
+    wait_for_change: bool | str = True,
+    wait_for_query: str = "",
+    wait_match_mode: str = "auto",
+    wait_until: str = "appear",
+    timeout_seconds: float = 2.0,
+    poll_interval: float = 0.25,
+    focus_window: bool | str = True,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    grid_size: int = 6,
+) -> str:
+    """Find a UI element, act on it, and observe the result server-side.
+
+    This bundles semantic search, click/hover/double/type interaction, and
+    optional wait-for-change observation into one tool call so the chat does
+    not need repeated screenshot-heavy loops.
+    """
+    err = _check_win32("UIAct")
+    if err:
+        return err
+    try:
+        payload = _run_ui_action(
+            query=query,
+            window_title=window_title,
+            include_text=_tobool(include_text),
+            match_mode=match_mode,
+            button=button,
+            action=action,
+            text=text,
+            clear=_tobool(clear),
+            press_enter=_tobool(press_enter),
+            wait_for_change=_tobool(wait_for_change),
+            wait_for_query=wait_for_query,
+            wait_match_mode=wait_match_mode,
+            wait_until=wait_until,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            focus_window=_tobool(focus_window),
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            grid_size=grid_size,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"UIAct error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UISequence",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def UISequence(
+    steps_json: str,
+    window_title: str = "",
+    include_text: bool | str = False,
+    compact: bool | str = True,
+    continue_on_error: bool | str = False,
+    default_timeout_seconds: float = 2.0,
+    default_poll_interval: float = 0.25,
+    max_steps: int = 8,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    grid_size: int = 6,
+) -> str:
+    """Run a compact multi-step GUI workflow server-side.
+
+    Accepts a JSON list of steps so the agent can execute a short GUI routine
+    in one round trip and return a concise summary instead of per-step chat churn.
+    Supported step actions: click, double, hover, right_click, type, observe,
+    wait, waitfor, and shortcut.
+    """
+    err = _check_win32("UISequence")
+    if err:
+        return err
+    try:
+        compact = _tobool(compact)
+        continue_on_error = _tobool(continue_on_error)
+        include_text = _tobool(include_text)
+
+        raw = json.loads(steps_json)
+        steps = raw.get("steps") if isinstance(raw, dict) else raw
+        if not isinstance(steps, list) or not steps:
+            return "UISequence error: steps_json must decode to a non-empty list or {'steps': [...]}"
+        if len(steps) > max_steps:
+            return f"UISequence error: received {len(steps)} steps but max_steps={max_steps}"
+
+        results: list[dict[str, Any]] = []
+        current_window_title = window_title
+
+        for index, step in enumerate(steps, start=1):
+            if not isinstance(step, dict):
+                error_result = {"step": index, "status": "error", "error": "each step must be an object"}
+                results.append(error_result)
+                if not continue_on_error:
+                    break
+                continue
+
+            step_action = str(step.get("action") or step.get("type") or "click").strip().lower()
+            step_window_title = str(step.get("window_title") or current_window_title or "")
+
+            try:
+                if step_action == "observe":
+                    observation = desktop.observe_screen(
+                        window_title=step_window_title,
+                        include_text=include_text if "include_text" not in step else _tobool(step.get("include_text", False)),
+                        monitor=int(step.get("monitor", 0) or 0),
+                        max_elements=min(max_elements, int(step.get("max_elements", max_elements) or max_elements)),
+                        min_width=int(step.get("min_width", min_width) or min_width),
+                        min_height=int(step.get("min_height", min_height) or min_height),
+                        grid_size=int(step.get("grid_size", grid_size) or grid_size),
+                        reset=_tobool(step.get("reset", False)),
+                        update_baseline=_tobool(step.get("update_baseline", True)),
+                    )
+                    step_result: dict[str, Any] = {
+                        "step": index,
+                        "action": "observe",
+                        "status": "completed",
+                        "result": _compact_observation_payload(observation) if compact else observation,
+                    }
+                elif step_action == "wait":
+                    seconds = max(0.0, float(step.get("seconds", step.get("duration", 1.0)) or 0.0))
+                    time.sleep(seconds)
+                    step_result = {
+                        "step": index,
+                        "action": "wait",
+                        "status": "completed",
+                        "result": {"seconds": seconds},
+                    }
+                elif step_action == "waitfor":
+                    wait_payload = _wait_for_ui_query(
+                        query=str(step.get("query") or ""),
+                        window_title=step_window_title,
+                        include_text=include_text if "include_text" not in step else _tobool(step.get("include_text", False)),
+                        match_mode=str(step.get("match_mode") or step.get("wait_match_mode") or "auto"),
+                        wait_until=str(step.get("wait_until") or "appear"),
+                        timeout_seconds=float(step.get("timeout_seconds", default_timeout_seconds) or default_timeout_seconds),
+                        poll_interval=float(step.get("poll_interval", default_poll_interval) or default_poll_interval),
+                        max_elements=int(step.get("max_elements", max_elements) or max_elements),
+                        min_width=int(step.get("min_width", min_width) or min_width),
+                        min_height=int(step.get("min_height", min_height) or min_height),
+                        grid_size=int(step.get("grid_size", grid_size) or grid_size),
+                    )
+                    step_result = {
+                        "step": index,
+                        "action": "waitfor",
+                        "status": wait_payload.get("status", "completed"),
+                        "result": _compact_wait_payload(wait_payload) if compact else wait_payload,
+                    }
+                elif step_action == "shortcut":
+                    keys = str(step.get("keys") or "").strip()
+                    if not keys:
+                        raise ValueError("shortcut step requires keys")
+                    pyautogui.hotkey(*[k.strip() for k in keys.lower().split("+") if k.strip()])
+                    step_result = {
+                        "step": index,
+                        "action": "shortcut",
+                        "status": "completed",
+                        "result": {"keys": keys},
+                    }
+                else:
+                    action_payload = _run_ui_action(
+                        query=str(step.get("query") or ""),
+                        window_title=step_window_title,
+                        include_text=include_text if "include_text" not in step else _tobool(step.get("include_text", False)),
+                        match_mode=str(step.get("match_mode") or "auto"),
+                        button=str(step.get("button") or "left"),
+                        action=step_action,
+                        text=str(step.get("text") or ""),
+                        clear=_tobool(step.get("clear", False)),
+                        press_enter=_tobool(step.get("press_enter", False)),
+                        wait_for_change=_tobool(step.get("wait_for_change", True)),
+                        timeout_seconds=float(step.get("timeout_seconds", default_timeout_seconds) or default_timeout_seconds),
+                        poll_interval=float(step.get("poll_interval", default_poll_interval) or default_poll_interval),
+                        focus_window=_tobool(step.get("focus_window", True)),
+                        max_elements=int(step.get("max_elements", max_elements) or max_elements),
+                        min_width=int(step.get("min_width", min_width) or min_width),
+                        min_height=int(step.get("min_height", min_height) or min_height),
+                        grid_size=int(step.get("grid_size", grid_size) or grid_size),
+                    )
+                    current_window_title = str(action_payload.get("window_title") or current_window_title or "")
+                    action_result: dict[str, Any]
+                    if compact:
+                        action_result = {
+                            "status": action_payload.get("status"),
+                            "interaction": action_payload.get("interaction"),
+                            "target": {
+                                "label": ((action_payload.get("target") or {}).get("label")),
+                                "class": ((action_payload.get("target") or {}).get("class")),
+                                "monitor_id": ((action_payload.get("target") or {}).get("monitor_id")),
+                                "match": ((action_payload.get("target") or {}).get("match")),
+                            },
+                            "observation_after": _compact_observation_payload(action_payload.get("observation_after")),
+                            "wait_condition": _compact_wait_payload(action_payload.get("wait_condition")),
+                            "recommendations": (action_payload.get("search") or {}).get("recommendations", [])[:2],
+                        }
+                        if action_payload.get("status") == "no-match":
+                            action_result["searchable_preview"] = (action_payload.get("search") or {}).get("searchable_preview", [])[:5]
+                    else:
+                        action_result = action_payload
+                    step_result = {
+                        "step": index,
+                        "action": step_action,
+                        "status": action_payload.get("status", "completed"),
+                        "result": action_result,
+                    }
+
+                results.append(step_result)
+                if step_result.get("status") not in {"completed", "no-match"} and not continue_on_error:
+                    break
+                if step_result.get("status") == "no-match" and not continue_on_error:
+                    break
+            except Exception as step_error:
+                step_result = {
+                    "step": index,
+                    "action": step_action,
+                    "status": "error",
+                    "error": str(step_error),
+                }
+                results.append(step_result)
+                if not continue_on_error:
+                    break
+
+        completed_steps = sum(1 for item in results if item.get("status") == "completed")
+        payload: dict[str, Any] = {
+            "status": "completed" if results and all(item.get("status") == "completed" for item in results) else "partial",
+            "step_count": len(steps),
+            "executed_steps": len(results),
+            "completed_steps": completed_steps,
+            "compact": compact,
+            "window_title": current_window_title or window_title or None,
+            "results": results,
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"UISequence error: {e}"
 
 
 # ================================ Task Management ================================

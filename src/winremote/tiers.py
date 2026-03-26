@@ -10,6 +10,7 @@ TOOL_TIERS = {
         "UIMapJson",
         "UIFind",
         "UIWatch",
+        "ObserveScreen",
         "GetClipboard",
         "GetSystemInfo",
         "ListProcesses",
@@ -32,6 +33,8 @@ TOOL_TIERS = {
     "tier2": {
         "Click",
         "UIClick",
+        "UIAct",
+        "UISequence",
         "Type",
         "Move",
         "Scroll",
