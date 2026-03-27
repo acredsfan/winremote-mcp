@@ -2796,15 +2796,76 @@ def cli(
             run_kwargs["middleware"] = middleware
         if platform.system() == "Windows":
             os.environ.setdefault("NO_COLOR", "1")
-        uvicorn_args = {}
+        uvicorn_config = {}
         if reload:
-            uvicorn_args["reload"] = True
+            uvicorn_config["reload"] = True
         if ssl_certfile and ssl_keyfile:
-            uvicorn_args["ssl_certfile"] = ssl_certfile
-            uvicorn_args["ssl_keyfile"] = ssl_keyfile
-        if uvicorn_args:
-            run_kwargs["uvicorn_args"] = uvicorn_args
+            uvicorn_config["ssl_certfile"] = ssl_certfile
+            uvicorn_config["ssl_keyfile"] = ssl_keyfile
+        if uvicorn_config:
+            run_kwargs["uvicorn_config"] = uvicorn_config
         mcp.run(**run_kwargs)
+
+
+@cli.command()
+@click.option("--certfile", default="cert.pem", help="Output certificate file (default: cert.pem)")
+@click.option("--keyfile", default="key.pem", help="Output private key file (default: key.pem)")
+@click.option("--days", default=825, type=int, help="Certificate validity in days (default: 825)")
+@click.option("--hostname", default="localhost", help="Hostname/IP to include in SAN (default: localhost)")
+def gencert(certfile: str, keyfile: str, days: int, hostname: str) -> None:
+    """Generate a self-signed TLS certificate for HTTPS mode."""
+    import datetime
+    import ipaddress
+
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+    except ImportError:
+        click.echo("[ERROR] 'cryptography' package not found. Run: pip install cryptography")
+        raise SystemExit(1)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    san_entries: list = [x509.DNSName("localhost"), x509.DNSName(hostname)]
+    try:
+        san_entries.append(x509.IPAddress(ipaddress.ip_address(hostname)))
+    except ValueError:
+        pass
+    san_entries.append(x509.IPAddress(ipaddress.ip_address("127.0.0.1")))
+
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=days))
+        .add_extension(x509.SubjectAlternativeName(san_entries), critical=False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+
+    with open(keyfile, "wb") as f:
+        f.write(key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        ))
+    with open(certfile, "wb") as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
+
+    click.echo(f"[OK] Private key : {keyfile}")
+    click.echo(f"[OK] Certificate : {certfile}")
+    click.echo(f"[OK] Valid for   : {days} days")
+    click.echo(f"[OK] SAN hosts   : {', '.join(str(e.value) for e in san_entries)}")
+    click.echo("")
+    click.echo("Start the server with:")
+    click.echo(f"  winremote-mcp --host 0.0.0.0 --auth-key YOUR_KEY --ssl-certfile {certfile} --ssl-keyfile {keyfile}")
 
 
 @cli.command()
