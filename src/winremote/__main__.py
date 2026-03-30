@@ -27,7 +27,7 @@ except ImportError:
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 
-from winremote import __version__, desktop, network, ocr, process_mgr, recording, registry, services
+from winremote import __version__, desktop, network, ocr, process_mgr, recording, registry, roblox_studio, roblox_studio_harness, services
 from winremote.config import discover_config_path, load_config
 from winremote.security import IPAllowlistMiddleware, parse_ip_allowlist
 from winremote.taskmanager import manager as task_manager
@@ -205,6 +205,194 @@ def _compact_wait_payload(payload: dict[str, Any] | None) -> dict[str, Any] | No
         "recommendations": _trim_recommendations(payload.get("recommendations"), limit=2),
         "observation_after": _compact_observation_payload(payload.get("observation_after")),
     }
+
+
+def _normalized_key_list(keys: str | list[str]) -> list[str]:
+    """Normalize keys from either a '+'-delimited string or a list."""
+    if isinstance(keys, list):
+        parts = [str(part).strip().lower() for part in keys]
+    else:
+        raw = str(keys or "").replace(",", "+")
+        parts = [part.strip().lower() for part in raw.split("+")]
+    parts = [part for part in parts if part]
+    if not parts:
+        raise ValueError("At least one key is required")
+    return parts
+
+
+def _find_window_by_title_fragment(title: str) -> desktop.WindowInfo | None:
+    """Return the best matching window for a title fragment."""
+    target = (title or "").strip().lower()
+    if not target:
+        return None
+    windows = desktop.enumerate_windows()
+    exact = [window for window in windows if window.title.strip().lower() == target]
+    if exact:
+        return exact[0]
+    contains = [window for window in windows if target in window.title.lower()]
+    return contains[0] if contains else None
+
+
+def _process_matches(*, pid: int = 0, name: str = "") -> list[dict[str, Any]]:
+    """Return process matches for assertions and diagnostics."""
+    import psutil
+
+    needle = (name or "").strip().lower()
+    matches: list[dict[str, Any]] = []
+    for proc in psutil.process_iter(["pid", "name", "status"]):
+        try:
+            info = proc.info
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        proc_name = str(info.get("name") or "")
+        proc_pid = int(info.get("pid") or 0)
+        if pid and proc_pid != pid:
+            continue
+        if needle and needle not in proc_name.lower():
+            continue
+        matches.append(
+            {
+                "pid": proc_pid,
+                "name": proc_name,
+                "status": info.get("status"),
+            }
+        )
+    return matches
+
+
+def _wait_for_region_text(
+    *,
+    query: str,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    wait_until: str = "appear",
+    timeout_seconds: float = 5.0,
+    poll_interval: float = 0.5,
+    lang: str = "eng",
+) -> dict[str, Any]:
+    """Poll OCR on a region until text appears or disappears."""
+    wait_until = _normalize_wait_until(wait_until)
+    needle = (query or "").strip().lower()
+    if not needle:
+        raise ValueError("query is required")
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    poll_interval = max(0.05, float(poll_interval))
+    left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
+    deadline = time.monotonic() + timeout_seconds
+    attempts = 0
+    last_text = ""
+
+    while True:
+        attempts += 1
+        last_text = ocr.run_ocr(left=left, top=top, right=right, bottom=bottom, lang=lang)
+        has_match = needle in last_text.lower()
+        satisfied = has_match if wait_until == "appear" else not has_match
+        if satisfied:
+            return {
+                "query": query,
+                "wait_until": wait_until,
+                "satisfied": True,
+                "timed_out": False,
+                "attempts": attempts,
+                "region": {"left": left, "top": top, "right": right, "bottom": bottom},
+                "matched": has_match,
+                "text_excerpt": last_text[:1000],
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "query": query,
+                "wait_until": wait_until,
+                "satisfied": False,
+                "timed_out": True,
+                "attempts": attempts,
+                "region": {"left": left, "top": top, "right": right, "bottom": bottom},
+                "matched": has_match,
+                "text_excerpt": last_text[:1000],
+            }
+        time.sleep(poll_interval)
+
+
+def _wait_for_image_change(
+    *,
+    window_title: str = "",
+    monitor: int = 0,
+    left: int = 0,
+    top: int = 0,
+    right: int = 0,
+    bottom: int = 0,
+    timeout_seconds: float = 5.0,
+    poll_interval: float = 0.25,
+    min_change_ratio: float = 0.02,
+    grid_size: int = 6,
+    reset_baseline: bool = True,
+) -> dict[str, Any]:
+    """Wait for a visible change in a region, monitor, or window."""
+    region = {}
+    if left or top or right or bottom:
+        left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
+        region = {"left": left, "top": top, "right": right, "bottom": bottom}
+
+    baseline = None
+    if reset_baseline:
+        baseline = desktop.observe_screen(
+            window_title=window_title,
+            monitor=monitor,
+            grid_size=grid_size,
+            reset=True,
+            update_baseline=True,
+            **region,
+        )
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    attempts = 0
+    last_payload = baseline
+    while True:
+        attempts += 1
+        last_payload = desktop.observe_screen(
+            window_title=window_title,
+            monitor=monitor,
+            grid_size=grid_size,
+            reset=False,
+            update_baseline=False,
+            **region,
+        )
+        change_ratio = float(last_payload.get("change_ratio") or 0.0)
+        if bool(last_payload.get("changed")) and change_ratio >= min_change_ratio:
+            desktop.observe_screen(
+                window_title=window_title,
+                monitor=monitor,
+                grid_size=grid_size,
+                reset=False,
+                update_baseline=True,
+                **region,
+            )
+            return {
+                "satisfied": True,
+                "timed_out": False,
+                "attempts": attempts,
+                "min_change_ratio": min_change_ratio,
+                "observation": last_payload,
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "satisfied": False,
+                "timed_out": True,
+                "attempts": attempts,
+                "min_change_ratio": min_change_ratio,
+                "observation": last_payload,
+            }
+        time.sleep(max(0.05, float(poll_interval)))
+
+
+def _studio_focus() -> str:
+    """Best-effort focus for Roblox Studio."""
+    return desktop.focus_window(title="Roblox Studio")
+
+
+def _studio_harness_payload(route: str, *, payload: dict[str, Any] | None = None, harness_url: str = "", timeout: float = 10.0) -> dict[str, Any]:
+    """Call the local Roblox Studio harness and return its payload."""
+    return roblox_studio.harness_request("POST", route, payload=payload, harness_url=harness_url, timeout=timeout)
 
 
 def _ensure_session_connected() -> str | None:
@@ -586,6 +774,537 @@ def Wait(seconds: float = 1.0) -> str:
     """
     time.sleep(seconds)
     return f"Waited {seconds}s"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="KeyDown",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def KeyDown(key: str) -> str:
+    """Press and hold a keyboard key until KeyUp is called."""
+    try:
+        pyautogui.keyDown(str(key).strip().lower())
+        return f"Held key down: {key}"
+    except Exception as e:
+        return f"KeyDown error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="KeyUp",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def KeyUp(key: str) -> str:
+    """Release a previously held keyboard key."""
+    try:
+        pyautogui.keyUp(str(key).strip().lower())
+        return f"Released key: {key}"
+    except Exception as e:
+        return f"KeyUp error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="HoldKeys",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def HoldKeys(keys: str, duration_seconds: float = 1.0) -> str:
+    """Hold one or more keys for a duration, then release them."""
+    normalized = _normalized_key_list(keys)
+    try:
+        for key in normalized:
+            pyautogui.keyDown(key)
+        time.sleep(max(0.0, float(duration_seconds)))
+        for key in reversed(normalized):
+            pyautogui.keyUp(key)
+        return f"Held keys {', '.join(normalized)} for {duration_seconds}s"
+    except Exception as e:
+        return f"HoldKeys error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="MouseDown",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def MouseDown(button: str = "left", x: int = 0, y: int = 0) -> str:
+    """Hold a mouse button down, optionally moving first."""
+    try:
+        if x or y:
+            desktop.validate_screen_point(x, y)
+            pyautogui.moveTo(x, y)
+        pyautogui.mouseDown(button=button)
+        return f"Held mouse button down: {button}"
+    except Exception as e:
+        return f"MouseDown error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="MouseUp",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def MouseUp(button: str = "left", x: int = 0, y: int = 0) -> str:
+    """Release a mouse button, optionally moving first."""
+    try:
+        if x or y:
+            desktop.validate_screen_point(x, y)
+            pyautogui.moveTo(x, y)
+        pyautogui.mouseUp(button=button)
+        return f"Released mouse button: {button}"
+    except Exception as e:
+        return f"MouseUp error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="MouseMoveRelative",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def MouseMoveRelative(dx: int, dy: int, duration: float = 0.0) -> str:
+    """Move the cursor relative to its current position."""
+    try:
+        x, y = pyautogui.position()
+        target_x = x + int(dx)
+        target_y = y + int(dy)
+        desktop.validate_screen_point(target_x, target_y)
+        if hasattr(pyautogui, "moveRel"):
+            pyautogui.moveRel(dx, dy, duration=duration)
+        else:
+            pyautogui.moveTo(target_x, target_y, duration=duration)
+        return f"Moved mouse relatively by ({dx},{dy})"
+    except Exception as e:
+        return f"MouseMoveRelative error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="MouseLook",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def MouseLook(dx: int, dy: int, duration: float = 0.1, steps: int = 3) -> str:
+    """Perform a segmented relative mouse move useful for camera/look controls."""
+    try:
+        steps = max(1, int(steps))
+        step_dx = dx / steps
+        step_dy = dy / steps
+        step_duration = max(0.0, float(duration)) / steps
+        for _ in range(steps):
+            if hasattr(pyautogui, "moveRel"):
+                pyautogui.moveRel(step_dx, step_dy, duration=step_duration)
+            else:
+                x, y = pyautogui.position()
+                pyautogui.moveTo(x + step_dx, y + step_dy, duration=step_duration)
+        return f"Performed mouse look by ({dx},{dy}) in {steps} steps"
+    except Exception as e:
+        return f"MouseLook error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="WaitForRegionText",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def WaitForRegionText(
+    query: str,
+    left: int,
+    top: int,
+    right: int,
+    bottom: int,
+    wait_until: str = "appear",
+    timeout_seconds: float = 5.0,
+    poll_interval: float = 0.5,
+    lang: str = "eng",
+) -> str:
+    """Wait until OCR text appears or disappears within a screen region."""
+    try:
+        payload = _wait_for_region_text(
+            query=query,
+            left=left,
+            top=top,
+            right=right,
+            bottom=bottom,
+            wait_until=wait_until,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            lang=lang,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"WaitForRegionText error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="WaitForImageChange",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def WaitForImageChange(
+    window_title: str = "",
+    monitor: int = 0,
+    left: int = 0,
+    top: int = 0,
+    right: int = 0,
+    bottom: int = 0,
+    timeout_seconds: float = 5.0,
+    poll_interval: float = 0.25,
+    min_change_ratio: float = 0.02,
+    grid_size: int = 6,
+) -> str:
+    """Wait until a window, monitor, or region visibly changes."""
+    try:
+        payload = _wait_for_image_change(
+            window_title=window_title,
+            monitor=monitor,
+            left=left,
+            top=top,
+            right=right,
+            bottom=bottom,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+            min_change_ratio=min_change_ratio,
+            grid_size=grid_size,
+        )
+        payload["observation"] = _compact_observation_payload(payload.get("observation"))
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"WaitForImageChange error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="AssertWindowActive",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def AssertWindowActive(title: str) -> str:
+    """Assert that the active window matches a title fragment."""
+    err = _check_win32("AssertWindowActive")
+    if err:
+        return err
+    try:
+        if not getattr(desktop, "HAS_WIN32", False):
+            return json.dumps({"ok": False, "matched": False, "reason": "pywin32 not available"})
+        foreground_handle = desktop.win32gui.GetForegroundWindow()
+        foreground_title = desktop.win32gui.GetWindowText(foreground_handle) if foreground_handle else ""
+        matched = title.strip().lower() in foreground_title.strip().lower()
+        return json.dumps(
+            {
+                "ok": matched,
+                "matched": matched,
+                "expected_title": title,
+                "window": {"handle": foreground_handle, "title": foreground_title},
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"AssertWindowActive error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="AssertProcessRunning",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def AssertProcessRunning(name: str = "", pid: int = 0) -> str:
+    """Assert that a process is running by name fragment or PID."""
+    try:
+        matches = _process_matches(pid=pid, name=name)
+        return json.dumps(
+            {
+                "ok": bool(matches),
+                "matched": bool(matches),
+                "query": {"name": name or None, "pid": pid or None},
+                "matches": matches[:10],
+                "count": len(matches),
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"AssertProcessRunning error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="TailFile",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def TailFile(path: str, lines: int = 100, encoding: str = "utf-8", contains: str = "") -> str:
+    """Read the tail of a text file, optionally filtering matching lines."""
+    try:
+        payload = roblox_studio.tail_file(path, lines=lines, encoding=encoding, contains=contains)
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"TailFile error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="CaptureFailureBundle",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def CaptureFailureBundle(
+    window_title: str = "",
+    log_path: str = "",
+    log_lines: int = 120,
+    use_vision: bool | str = True,
+    quality: int = 60,
+    max_width: int = 1600,
+) -> list:
+    """Capture a compact debugging bundle with screenshot, observation, processes, and recent logs."""
+    try:
+        parts = []
+        use_vision = _tobool(use_vision)
+        if use_vision:
+            parts.extend(Snapshot(use_vision=True, quality=quality, max_width=max_width))
+
+        observation = desktop.observe_screen(window_title=window_title, reset=False, update_baseline=False)
+        processes = _process_matches(name="Roblox")[:10]
+        logs = None
+        if log_path:
+            logs = roblox_studio.tail_file(log_path, lines=log_lines)
+        else:
+            try:
+                logs = roblox_studio.read_latest_studio_errors(lines=log_lines)
+            except Exception:
+                logs = None
+
+        payload = {
+            "window_title": window_title or None,
+            "observation": _compact_observation_payload(observation),
+            "processes": processes,
+            "logs": logs,
+        }
+        parts.append(TextContent(type="text", text=json.dumps(payload, indent=2)))
+        return parts
+    except Exception as e:
+        return [f"CaptureFailureBundle error: {e}"]
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioRunPlaytest",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioRunPlaytest(
+    mode: str = "play_solo",
+    focus_window: bool | str = True,
+    shortcut_override: str = "",
+    timeout_seconds: float = 5.0,
+) -> str:
+    """Start a Roblox Studio playtest and wait for visible change."""
+    try:
+        shortcuts = {
+            "play_solo": "f5",
+        }
+        mode_key = str(mode or "play_solo").strip().lower()
+        shortcut = shortcut_override.strip() or shortcuts.get(mode_key)
+        if not shortcut:
+            return (
+                "RobloxStudioRunPlaytest error: unsupported mode. "
+                "Use mode='play_solo' or provide shortcut_override."
+            )
+
+        focus_result = _studio_focus() if _tobool(focus_window) else None
+        pre_payload = desktop.observe_screen(window_title="Roblox Studio", reset=True, update_baseline=True)
+        pyautogui.hotkey(*_normalized_key_list(shortcut))
+        post_payload = _wait_for_image_change(
+            window_title="Roblox Studio",
+            timeout_seconds=max(0.5, float(timeout_seconds)),
+            poll_interval=0.25,
+            min_change_ratio=0.01,
+            reset_baseline=False,
+        )
+        latest_log = roblox_studio.find_latest_studio_log()
+        payload = {
+            "status": "completed",
+            "mode": mode_key,
+            "shortcut": shortcut,
+            "focus_result": focus_result,
+            "pre_observation": _compact_observation_payload(pre_payload),
+            "post_observation": _compact_observation_payload(post_payload.get("observation")),
+            "changed": post_payload.get("satisfied"),
+            "studio_log_path": str(latest_log) if latest_log else None,
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioRunPlaytest error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioStopPlaytest",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioStopPlaytest(
+    focus_window: bool | str = True,
+    shortcut_override: str = "",
+    timeout_seconds: float = 5.0,
+) -> str:
+    """Stop a Roblox Studio playtest and wait for visible change."""
+    try:
+        shortcut = shortcut_override.strip() or "shift+f5"
+        focus_result = _studio_focus() if _tobool(focus_window) else None
+        pre_payload = desktop.observe_screen(window_title="Roblox Studio", reset=True, update_baseline=True)
+        pyautogui.hotkey(*_normalized_key_list(shortcut))
+        post_payload = _wait_for_image_change(
+            window_title="Roblox Studio",
+            timeout_seconds=max(0.5, float(timeout_seconds)),
+            poll_interval=0.25,
+            min_change_ratio=0.01,
+            reset_baseline=False,
+        )
+        payload = {
+            "status": "completed",
+            "shortcut": shortcut,
+            "focus_result": focus_result,
+            "pre_observation": _compact_observation_payload(pre_payload),
+            "post_observation": _compact_observation_payload(post_payload.get("observation")),
+            "changed": post_payload.get("satisfied"),
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioStopPlaytest error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioGetOutput",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioGetOutput(lines: int = 200, contains: str = "") -> str:
+    """Tail the latest Roblox Studio log, useful as an output/error stream."""
+    try:
+        payload = roblox_studio.read_latest_studio_log(lines=lines, contains=contains)
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioGetOutput error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioGetErrors",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioGetErrors(lines: int = 200) -> str:
+    """Return likely error/warning lines from the latest Roblox Studio log."""
+    try:
+        payload = roblox_studio.read_latest_studio_errors(lines=lines)
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioGetErrors error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioGetTestState",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioGetTestState(harness_url: str = "", timeout_seconds: float = 5.0) -> str:
+    """Query a local Roblox Studio test harness for structured runtime state."""
+    payload = roblox_studio.harness_request("GET", "/state", harness_url=harness_url, timeout=timeout_seconds)
+    return json.dumps(payload, indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioResetCharacter",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioResetCharacter(harness_url: str = "", timeout_seconds: float = 5.0) -> str:
+    """Reset the current Studio playtest character through a local test harness."""
+    payload = _studio_harness_payload(
+        "/reset-character",
+        payload={"wait": True, "timeout_seconds": timeout_seconds},
+        harness_url=harness_url,
+        timeout=timeout_seconds,
+    )
+    return json.dumps(payload, indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioTeleportToCheckpoint",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioTeleportToCheckpoint(checkpoint_id: str, harness_url: str = "", timeout_seconds: float = 5.0) -> str:
+    """Teleport to a named checkpoint through a local Studio harness."""
+    payload = _studio_harness_payload(
+        "/teleport-checkpoint",
+        payload={"checkpoint_id": checkpoint_id, "wait": True, "timeout_seconds": timeout_seconds},
+        harness_url=harness_url,
+        timeout=timeout_seconds,
+    )
+    return json.dumps(payload, indent=2)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioRunNamedTest",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioRunNamedTest(
+    test_name: str,
+    payload_json: str = "",
+    harness_url: str = "",
+    timeout_seconds: float = 30.0,
+) -> str:
+    """Run a named Studio-side test through a local harness."""
+    try:
+        payload: dict[str, Any] = {"test_name": test_name}
+        if payload_json.strip():
+            extra = json.loads(payload_json)
+            if not isinstance(extra, dict):
+                return "RobloxStudioRunNamedTest error: payload_json must decode to an object"
+            payload.update(extra)
+        payload.setdefault("wait", True)
+        payload.setdefault("timeout_seconds", timeout_seconds)
+        result = _studio_harness_payload("/run-test", payload=payload, harness_url=harness_url, timeout=timeout_seconds)
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"RobloxStudioRunNamedTest error: {e}"
 
 
 # =========================== WINDOW MANAGEMENT ============================
@@ -3087,6 +3806,39 @@ def uninstall():
             click.echo(f"[OK] Removed startup script: {bat_path}")
     except Exception as e:
         click.echo(f"[ERROR] Failed to remove startup script: {e}")
+
+
+@cli.group(name="roblox-studio")
+def roblox_studio_cli():
+    """Helpers for Roblox Studio playtest harness setup."""
+
+
+@roblox_studio_cli.command(name="serve-harness")
+@click.option("--host", default="127.0.0.1", help="Bind address for the local harness")
+@click.option("--port", default=51234, type=int, help="Bind port for the local harness")
+@click.option("--stale-after", default=5.0, type=float, help="Seconds before a Studio client is treated as disconnected")
+@click.option("--max-events", default=100, type=int, help="Maximum recent events to retain in memory")
+def serve_roblox_studio_harness(host: str, port: int, stale_after: float, max_events: int) -> None:
+    """Run the local Roblox Studio harness used by RobloxStudio* MCP tools."""
+    click.echo(f"[OK] Roblox Studio harness listening on http://{host}:{port}")
+    click.echo("[OK] Use Ctrl+C to stop it")
+    roblox_studio_harness.serve_harness(
+        host=host,
+        port=port,
+        stale_after_seconds=stale_after,
+        max_events=max_events,
+    )
+
+
+@roblox_studio_cli.command(name="export-harness")
+@click.option("--output-dir", default="roblox-studio-harness", help="Directory to write Studio harness files into")
+@click.option("--harness-url", default="http://127.0.0.1:51234", help="Harness URL Studio should call during playtests")
+def export_roblox_studio_harness(output_dir: str, harness_url: str) -> None:
+    """Export the Luau files that run inside a Roblox Studio playtest."""
+    written = roblox_studio_harness.export_studio_harness_files(output_dir, harness_url=harness_url)
+    click.echo("[OK] Wrote Roblox Studio harness files:")
+    for path in written:
+        click.echo(f"  {path}")
 
 
 @cli.command()

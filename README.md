@@ -39,6 +39,37 @@ winremote-mcp --host 0.0.0.0 --ssl-certfile cert.pem --ssl-keyfile key.pem --pro
 
 For the full setup flow, including HTTPS, auth, connector creation, and prompt patterns, see [`docs/chatgpt.md`](docs/chatgpt.md).
 
+## Roblox Studio Playtest Harness
+
+WinRemote can now pair its `RobloxStudio*` MCP tools with a local harness so ChatGPT can run Studio playtests, read structured state, reset characters, teleport to checkpoints, and run named tests without manual intervention.
+
+Start the local harness on the Windows machine:
+
+```bash
+winremote-mcp roblox-studio serve-harness
+```
+
+Export the Luau files for your Studio project:
+
+```bash
+winremote-mcp roblox-studio export-harness --output-dir .\\roblox-studio-harness
+```
+
+Then place these files in `ServerScriptService` in Roblox Studio:
+
+- `WinRemoteHarness.server.lua`
+- `WinRemoteHarnessConfig.lua`
+- `WinRemoteHarnessNamedTests.lua`
+
+Studio requirements:
+
+- Turn on `Game Settings > Security > Enable HTTP Requests`
+- Keep the harness URL in `WinRemoteHarnessConfig.lua` pointed at the Windows host, usually `http://127.0.0.1:51234`
+- Tag checkpoint parts with `WinRemoteCheckpoint` and optionally add a `CheckpointId` attribute
+- Add or customize named tests in `WinRemoteHarnessNamedTests.lua`
+
+The WinRemote MCP tools `RobloxStudioGetTestState`, `RobloxStudioResetCharacter`, `RobloxStudioTeleportToCheckpoint`, and `RobloxStudioRunNamedTest` will then use that harness automatically.
+
 ## What's New in v0.4.9
 
 ### 🔒 HTTPS / TLS Support

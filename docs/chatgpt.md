@@ -56,6 +56,22 @@ The `chatgpt` profile is tuned for developer-style desktop work:
 
 It still leaves out broader admin and destructive system tools like `KillProcess`, `RegWrite`, `TaskCreate`, `TaskDelete`, `ServiceStart`, and `ServiceStop`.
 
+## Roblox Studio Playtests
+
+For unattended Roblox Studio playtests, run the local harness on the Windows host:
+
+```bash
+winremote-mcp roblox-studio serve-harness
+```
+
+Export the Studio files:
+
+```bash
+winremote-mcp roblox-studio export-harness --output-dir .\\roblox-studio-harness
+```
+
+Place the exported `.lua` files in `ServerScriptService`, enable Studio HTTP requests, and customize `WinRemoteHarnessNamedTests.lua` for project-specific smoke tests or checkpoints. Once that is in place, the `RobloxStudio*` tools can pull structured state and execute named test actions instead of relying only on screenshots and desktop input.
+
 ## Connector Setup In ChatGPT
 
 Create a custom MCP connector in ChatGPT and point it at:

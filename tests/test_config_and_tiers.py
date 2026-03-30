@@ -86,6 +86,8 @@ def test_chatgpt_profile_resolution():
     assert "Click" in enabled
     assert "Type" in enabled
     assert "UIMap" in enabled
+    assert "RobloxStudioRunPlaytest" in enabled
+    assert "WaitForImageChange" in enabled
     assert "TaskCreate" not in enabled
 
 

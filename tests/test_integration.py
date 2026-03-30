@@ -45,9 +45,23 @@ class TestMCPToolRegistration:
             "Move",
             "Shortcut",
             "Wait",
+            "KeyDown",
+            "KeyUp",
+            "HoldKeys",
+            "MouseDown",
+            "MouseUp",
+            "MouseMoveRelative",
+            "MouseLook",
+            "WaitForRegionText",
+            "WaitForImageChange",
+            "AssertWindowActive",
+            "AssertProcessRunning",
+            "TailFile",
+            "CaptureFailureBundle",
             "FocusWindow",
             "MinimizeAll",
             "App",
+            "ReconnectSession",
             "Shell",
             "Scrape",
             "GetClipboard",
@@ -86,6 +100,14 @@ class TestMCPToolRegistration:
             "UIAct",
             "UISequence",
             "UIWatch",
+            "RobloxStudioRunPlaytest",
+            "RobloxStudioStopPlaytest",
+            "RobloxStudioGetOutput",
+            "RobloxStudioGetErrors",
+            "RobloxStudioGetTestState",
+            "RobloxStudioResetCharacter",
+            "RobloxStudioTeleportToCheckpoint",
+            "RobloxStudioRunNamedTest",
             "CancelTask",
             "GetTaskStatus",
             "GetRunningTasks",
@@ -111,4 +133,6 @@ class TestMCPToolRegistration:
         assert "Click" in enabled
         assert "Type" in enabled
         assert "UIMap" in enabled
+        assert "RobloxStudioRunPlaytest" in enabled
+        assert "WaitForImageChange" in enabled
         assert "TaskCreate" not in enabled
