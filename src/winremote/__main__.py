@@ -46,9 +46,10 @@ DEFAULT_SERVER_INSTRUCTIONS = (
 
 CHATGPT_SERVER_INSTRUCTIONS = (
     "Windows Remote MCP Server for ChatGPT full-MCP workflows. Prefer semantic GUI "
-    "tools first: ObserveScreen, UIFind, UIAct, UISequence, and UIWatch. Use Snapshot "
-    "only when pixels are actually required. FocusWindow or App should target the app "
-    "before interaction. Avoid raw coordinate tools unless the semantic path fails."
+    "tools first: ObserveScreen, UIFind, UIAct, UISequence, UIWatch, UIMap, and "
+    "AnnotatedSnapshot. Use Snapshot only when pixels are actually required. FocusWindow "
+    "or App should target the app before interaction. Use Click, Type, Move, Scroll, and "
+    "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough."
 )
 
 mcp = FastMCP(

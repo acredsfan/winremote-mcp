@@ -25,11 +25,11 @@ That's it! Your Windows MCP server is now running on `http://127.0.0.1:8090` and
 
 ## ChatGPT Full-MCP Profile
 
-WinRemote now includes an opt-in `chatgpt` profile for ChatGPT full-MCP usage. It narrows the default tool set to semantic, model-friendly GUI workflows and updates the server instructions to prefer:
+WinRemote now includes an opt-in `chatgpt` profile for ChatGPT full-MCP usage. It uses a semantic-first tool set for developer workflows and keeps lower-level desktop fallbacks available when needed:
 
 - `ObserveScreen`, `UIFind`, `UIAct`, `UISequence`, `UIWatch`
-- `Snapshot` only when pixels are actually needed
-- semantic window targeting before raw coordinates
+- `UIMap`, `AnnotatedSnapshot`, and `OCR` for harder custom UIs
+- `Click`, `Type`, `Move`, `Scroll`, and `Shortcut` as fallbacks
 
 Start it like this:
 

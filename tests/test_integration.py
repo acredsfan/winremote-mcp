@@ -108,5 +108,7 @@ class TestMCPToolRegistration:
         assert enabled == CHATGPT_PROFILE_TOOLS
         assert "UIAct" in enabled
         assert "Snapshot" in enabled
-        assert "Click" not in enabled
+        assert "Click" in enabled
+        assert "Type" in enabled
+        assert "UIMap" in enabled
         assert "TaskCreate" not in enabled

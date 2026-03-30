@@ -1,0 +1,14 @@
+[server]
+host = "0.0.0.0"
+port = 9000
+auth_key = "abc"
+profile = "chatgpt"
+
+[security]
+ip_allowlist = ["127.0.0.1", "10.0.0.0/8"]
+enable_tier3 = true
+disable_tier2 = false
+
+[tools]
+enable = ["Snapshot", "Click", "Type"]
+exclude = ["Type"]

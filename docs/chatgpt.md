@@ -1,6 +1,6 @@
 # ChatGPT Full-MCP Setup
 
-WinRemote's `chatgpt` profile is for ChatGPT full-MCP chat usage against a remote Windows host. It favors semantic GUI tools over raw coordinate loops so the model can work more like an operator and less like a pixel script.
+WinRemote's `chatgpt` profile is for ChatGPT full-MCP chat usage against a remote Windows host. It uses a semantic-first tool set, but it also keeps the coordinate and mapping fallbacks needed for custom desktop apps such as Roblox Studio and VS Code.
 
 ## Recommended Startup
 
@@ -45,15 +45,16 @@ oauth_client_secret = "my-secret"
 
 ## What The ChatGPT Profile Exposes
 
-The `chatgpt` profile keeps the tool surface focused on semantic desktop work:
+The `chatgpt` profile is tuned for developer-style desktop work:
 
 - `ObserveScreen`, `UIFind`, `UIWatch`, `UIAct`, `UISequence`
-- `Snapshot`, `OCR`
-- `FocusWindow`, `App`, `Shortcut`
+- `Snapshot`, `AnnotatedSnapshot`, `UIMap`, `UIMapJson`, `UIClick`, `OCR`
+- `Click`, `Type`, `Move`, `Scroll`, `Shortcut`, `Wait`
+- `FocusWindow`, `App`, `ReconnectSession`
 - `Shell`, `FileRead`, `FileWrite`, `FileList`, `FileSearch`
 - `GetClipboard`, `SetClipboard`, `GetSystemInfo`, `ListProcesses`, `Notification`
 
-It intentionally leaves out raw coordinate tools like `Click`, `Move`, `Scroll`, and broader admin/destructive tools unless you opt into them with `--tools` or a different profile.
+It still leaves out broader admin and destructive system tools like `KillProcess`, `RegWrite`, `TaskCreate`, `TaskDelete`, `ServiceStart`, and `ServiceStop`.
 
 ## Connector Setup In ChatGPT
 
@@ -74,9 +75,9 @@ For most GUI tasks, use this order:
 
 1. `FocusWindow` or `App` to target the application.
 2. `ObserveScreen` to learn whether the UI changed without requesting pixels.
-3. `UIFind` to locate semantic targets by label/class/OCR text.
-4. `UIAct` for one action plus observation/wait.
-5. `UISequence` for short multi-step routines in one round trip.
+3. `UIFind`, `UIMap`, or `AnnotatedSnapshot` to understand the UI.
+4. `UIAct` or `UISequence` for semantic interactions.
+5. `Click`, `Type`, `Move`, `Scroll`, or `Shortcut` when a custom UI needs lower-level control.
 6. `Snapshot` only when the model truly needs pixels.
 
 ## Prompt Patterns

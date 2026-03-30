@@ -73,10 +73,19 @@ CHATGPT_PROFILE_TOOLS = {
     "UIAct",
     "UISequence",
     "Snapshot",
+    "AnnotatedSnapshot",
+    "UIMap",
+    "UIMapJson",
+    "UIClick",
     "OCR",
+    "Click",
+    "Type",
+    "Move",
+    "Scroll",
     "FocusWindow",
     "App",
     "Shortcut",
+    "Wait",
     "Shell",
     "FileRead",
     "FileWrite",
@@ -87,6 +96,7 @@ CHATGPT_PROFILE_TOOLS = {
     "GetSystemInfo",
     "ListProcesses",
     "Notification",
+    "ReconnectSession",
 }
 _NAME_LOOKUP = {name.lower(): name for name in ALL_TOOLS}
 
