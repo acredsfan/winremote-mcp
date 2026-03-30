@@ -38,13 +38,22 @@ load_dotenv()
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0.05
 
+DEFAULT_SERVER_INSTRUCTIONS = (
+    "Windows Remote MCP Server. Provides desktop control, window management, "
+    "shell execution, file operations, network tools, registry, services, "
+    "and system management tools for a Windows machine."
+)
+
+CHATGPT_SERVER_INSTRUCTIONS = (
+    "Windows Remote MCP Server for ChatGPT full-MCP workflows. Prefer semantic GUI "
+    "tools first: ObserveScreen, UIFind, UIAct, UISequence, and UIWatch. Use Snapshot "
+    "only when pixels are actually required. FocusWindow or App should target the app "
+    "before interaction. Avoid raw coordinate tools unless the semantic path fails."
+)
+
 mcp = FastMCP(
     "winremote-mcp",
-    instructions=(
-        "Windows Remote MCP Server. Provides desktop control, window management, "
-        "shell execution, file operations, network tools, registry, services, "
-        "and system management tools for a Windows machine."
-    ),
+    instructions=DEFAULT_SERVER_INSTRUCTIONS,
 )
 
 
@@ -93,6 +102,107 @@ def _ui_coordinate_spaces() -> dict[str, str]:
         "rect": "Absolute virtual-screen rectangle in pixels.",
         "relative_center": "Coordinates relative to the mapped window's top-left corner.",
         "relative_rect": "Rectangle relative to the mapped window's top-left corner.",
+    }
+
+
+def _server_instructions_for_profile(profile: str) -> str:
+    """Return profile-specific server instructions."""
+    return CHATGPT_SERVER_INSTRUCTIONS if profile == "chatgpt" else DEFAULT_SERVER_INSTRUCTIONS
+
+
+def _trim_recommendations(recommendations: list[str] | None, limit: int = 4) -> list[str]:
+    """Keep recommendations compact and deduplicated."""
+    seen: set[str] = set()
+    trimmed: list[str] = []
+    for item in recommendations or []:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        trimmed.append(text)
+        if len(trimmed) >= limit:
+            break
+    return trimmed
+
+
+def _compact_window_target(window: dict[str, Any] | None, *, mode: str | None = None) -> dict[str, Any] | None:
+    """Return a compact window/target descriptor."""
+    if not window:
+        return {"mode": mode} if mode else None
+
+    target = {
+        "mode": mode,
+        "title": window.get("title") or window.get("label"),
+        "handle": window.get("handle"),
+        "pid": window.get("pid"),
+        "process_name": window.get("process_name"),
+        "monitor_id": window.get("monitor_id"),
+        "rect": window.get("rect"),
+    }
+    return {key: value for key, value in target.items() if value is not None}
+
+
+def _search_payload(
+    *,
+    searched_element_count: int | None = None,
+    searchable_preview: list[dict[str, Any]] | None = None,
+    summary: dict[str, Any] | None = None,
+    recommendations: list[str] | None = None,
+    ui_scope: str | None = None,
+) -> dict[str, Any]:
+    """Build a consistent search/inspection payload."""
+    return {
+        "searched_element_count": searched_element_count or 0,
+        "searchable_preview": (searchable_preview or [])[:5],
+        "summary": summary,
+        "ui_scope": ui_scope,
+        "recommendations": _trim_recommendations(recommendations),
+    }
+
+
+def _compact_observation_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a compact observation summary suitable for low-overhead chat flows."""
+    if payload is None:
+        return None
+    return {
+        "target": {
+            "mode": ((payload.get("target") or {}).get("mode")),
+            "window_title": (((payload.get("target") or {}).get("window") or {}).get("title")),
+            "captured_monitors": ((payload.get("target") or {}).get("captured_monitors")) or [],
+            "bounds": ((payload.get("target") or {}).get("bounds")),
+        },
+        "changed": payload.get("changed"),
+        "change_ratio": payload.get("change_ratio"),
+        "changed_regions": (payload.get("changed_regions") or [])[:3],
+        "search": _search_payload(
+            searched_element_count=((payload.get("ui_summary") or {}).get("control_count")),
+            searchable_preview=payload.get("searchable_preview"),
+            summary=payload.get("ui_summary"),
+            recommendations=payload.get("recommendations"),
+            ui_scope=payload.get("ui_scope"),
+        ),
+        "recommendations": _trim_recommendations(payload.get("recommendations"), limit=2),
+    }
+
+
+def _compact_wait_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a compact semantic-wait summary for low-overhead chat flows."""
+    if payload is None:
+        return None
+    return {
+        "query": payload.get("query"),
+        "wait_until": payload.get("wait_until"),
+        "satisfied": payload.get("satisfied"),
+        "timed_out": payload.get("timed_out"),
+        "target": payload.get("target"),
+        "search": _search_payload(
+            searched_element_count=payload.get("searched_element_count"),
+            searchable_preview=payload.get("searchable_preview"),
+            summary=payload.get("summary"),
+            recommendations=payload.get("recommendations"),
+        ),
+        "recommendations": _trim_recommendations(payload.get("recommendations"), limit=2),
+        "observation_after": _compact_observation_payload(payload.get("observation_after")),
     }
 
 
@@ -239,6 +349,29 @@ def Snapshot(
                 f"  [{w.handle}] {w.title} ({w.width}x{w.height} at {w.rect[0]},{w.rect[1]}){mon}{proc}"
             )
 
+        active_window = None
+        try:
+            mapped_foreground = desktop.map_ui_elements(max_elements=12)
+            if mapped_foreground:
+                active_window = mapped_foreground[0]
+        except Exception:
+            active_window = None
+
+        if active_window:
+            rect = active_window.get("rect") or {}
+            win_lines.extend(
+                [
+                    "",
+                    "**Active Window:**",
+                    (
+                        "  "
+                        f"{active_window.get('label') or active_window.get('window_text') or '(unknown)'}"
+                        f" | monitor={active_window.get('monitor_id', 0)}"
+                        f" | rect=({rect.get('left', 0)},{rect.get('top', 0)},{rect.get('right', 0)},{rect.get('bottom', 0)})"
+                    ),
+                ]
+            )
+
         # Interactive elements from foreground window
         elements = desktop.get_interactive_elements()
         if elements:
@@ -251,6 +384,17 @@ def Snapshot(
                 label = el["text"] or el["class"]
                 monitor_suffix = f" monitor={el.get('monitor_id', 0)}" if el.get("monitor_id") else ""
                 win_lines.append(f"  [{el['index']}] {label} — center ({cx},{cy}){monitor_suffix}")
+
+        win_lines.extend(
+            [
+                "",
+                "**Suggested Next Step:**",
+                (
+                    "  Prefer ObserveScreen, UIFind, UIAct, or UISequence for semantic GUI work. "
+                    "Use Snapshot again only when you need fresh pixels."
+                ),
+            ]
+        )
 
         parts.append(TextContent(type="text", text="\n".join(win_lines)))
         return parts
@@ -1649,16 +1793,24 @@ def UIFind(
             min_height=min_height,
         )
         monitor_ctx = _monitor_context()
+        search_payload = _search_payload(
+            searched_element_count=search_result["searched_element_count"],
+            searchable_preview=search_result["searchable_preview"],
+            summary=search_result["summary"],
+            recommendations=search_result["recommendations"],
+        )
         payload = {
             "query": query,
             "window_title": window_title or None,
             "match_mode": match_mode,
             "count": len(search_result["matches"]),
             "matches": search_result["matches"],
+            "target": _compact_window_target(search_result.get("window"), mode="window"),
+            "search": search_payload,
             "searched_element_count": search_result["searched_element_count"],
             "searchable_preview": search_result["searchable_preview"],
             "summary": search_result["summary"],
-            "recommendations": search_result["recommendations"],
+            "recommendations": search_payload["recommendations"],
             "monitors": monitor_ctx["monitors"],
             "virtual_screen": monitor_ctx["virtual_screen"],
             "coordinate_spaces": _ui_coordinate_spaces(),
@@ -1734,40 +1886,6 @@ def UIClick(
         )
     except Exception as e:
         return f"UIClick error: {e}"
-
-
-def _compact_observation_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Return a compact observation summary suitable for low-overhead chat flows."""
-    if payload is None:
-        return None
-    return {
-        "target": {
-            "mode": ((payload.get("target") or {}).get("mode")),
-            "window_title": (((payload.get("target") or {}).get("window") or {}).get("title")),
-        },
-        "changed": payload.get("changed"),
-        "change_ratio": payload.get("change_ratio"),
-        "changed_regions": (payload.get("changed_regions") or [])[:3],
-        "searchable_preview": (payload.get("searchable_preview") or [])[:5],
-        "recommendations": (payload.get("recommendations") or [])[:2],
-    }
-
-
-def _compact_wait_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Return a compact semantic-wait summary for low-overhead chat flows."""
-    if payload is None:
-        return None
-    return {
-        "query": payload.get("query"),
-        "wait_until": payload.get("wait_until"),
-        "satisfied": payload.get("satisfied"),
-        "timed_out": payload.get("timed_out"),
-        "target": payload.get("target"),
-        "searched_element_count": payload.get("searched_element_count"),
-        "searchable_preview": (payload.get("searchable_preview") or [])[:5],
-        "recommendations": (payload.get("recommendations") or [])[:2],
-        "observation_after": _compact_observation_payload(payload.get("observation_after")),
-    }
 
 
 def _normalize_wait_until(wait_until: str) -> str:
@@ -1974,18 +2092,21 @@ def _run_ui_action(
         min_height=min_height,
     )
     matches = search_result.get("matches") or []
+    search_payload = _search_payload(
+        searched_element_count=search_result.get("searched_element_count", 0),
+        searchable_preview=search_result.get("searchable_preview"),
+        summary=search_result.get("summary"),
+        recommendations=search_result.get("recommendations"),
+    )
     if not matches:
         return {
             "query": query,
             "window_title": window_title or None,
             "status": "no-match",
             "action": action,
-            "search": {
-                "searched_element_count": search_result.get("searched_element_count", 0),
-                "searchable_preview": search_result.get("searchable_preview", []),
-                "summary": search_result.get("summary"),
-                "recommendations": search_result.get("recommendations", []),
-            },
+            "target": _compact_window_target(search_result.get("window"), mode="window"),
+            "search": search_payload,
+            "recommendations": search_payload["recommendations"],
         }
 
     target = matches[0]
@@ -2109,15 +2230,17 @@ def _run_ui_action(
             "match": target.get("match"),
         },
         "search": {
-            "searched_element_count": search_result.get("searched_element_count", 0),
-            "searchable_preview": search_result.get("searchable_preview", []),
-            "summary": search_result.get("summary"),
-            "recommendations": search_result.get("recommendations", []),
+            "searched_element_count": search_payload["searched_element_count"],
+            "searchable_preview": search_payload["searchable_preview"],
+            "summary": search_payload["summary"],
+            "ui_scope": search_payload["ui_scope"],
+            "recommendations": search_payload["recommendations"],
         },
         "observation_before": observation_before,
         "observation_after": observation_after,
         "wait_for_change": wait_for_change,
         "wait_condition": wait_condition,
+        "recommendations": search_payload["recommendations"],
     }
     payload["coordinate_spaces"] = _ui_coordinate_spaces()
     return payload
@@ -2157,6 +2280,15 @@ def UIWatch(
             reset=_tobool(reset),
             update_baseline=_tobool(update_baseline),
         )
+        payload["target"] = _compact_window_target(payload.get("window"), mode="window")
+        payload["search"] = _search_payload(
+            searched_element_count=((payload.get("summary") or {}).get("control_count")),
+            searchable_preview=payload.get("searchable_preview"),
+            summary=payload.get("summary"),
+            recommendations=payload.get("recommendations"),
+            ui_scope="target_window" if window_title else "foreground_window",
+        )
+        payload["recommendations"] = payload["search"]["recommendations"]
         payload.update(_monitor_context())
         payload["coordinate_spaces"] = _ui_coordinate_spaces()
         return json.dumps(payload, indent=2)
@@ -2213,6 +2345,14 @@ def ObserveScreen(
             update_baseline=_tobool(update_baseline),
             **region,
         )
+        observation_payload["search"] = _search_payload(
+            searched_element_count=((observation_payload.get("ui_summary") or {}).get("control_count")),
+            searchable_preview=observation_payload.get("searchable_preview"),
+            summary=observation_payload.get("ui_summary"),
+            recommendations=observation_payload.get("recommendations"),
+            ui_scope=observation_payload.get("ui_scope"),
+        )
+        observation_payload["recommendations"] = observation_payload["search"]["recommendations"]
         observation_payload["coordinate_spaces"] = _ui_coordinate_spaces()
         return json.dumps(observation_payload, indent=2)
     except Exception as e:
@@ -2433,9 +2573,14 @@ def UISequence(
                                 "monitor_id": ((action_payload.get("target") or {}).get("monitor_id")),
                                 "match": ((action_payload.get("target") or {}).get("match")),
                             },
+                            "search": {
+                                "searched_element_count": (((action_payload.get("search") or {}).get("searched_element_count")) or 0),
+                                "searchable_preview": (((action_payload.get("search") or {}).get("searchable_preview")) or [])[:5],
+                                "summary": ((action_payload.get("search") or {}).get("summary")),
+                            },
                             "observation_after": _compact_observation_payload(action_payload.get("observation_after")),
                             "wait_condition": _compact_wait_payload(action_payload.get("wait_condition")),
-                            "recommendations": (action_payload.get("search") or {}).get("recommendations", [])[:2],
+                            "recommendations": (action_payload.get("recommendations") or [])[:2],
                         }
                         if action_payload.get("status") == "no-match":
                             action_result["searchable_preview"] = (action_payload.get("search") or {}).get("searchable_preview", [])[:5]
@@ -2633,6 +2778,7 @@ def _apply_tool_filter(enabled_tools: set[str]) -> None:
 @click.option("--reload", is_flag=True, default=False, help="Enable hot reload (streamable-http only)")
 @click.option("--auth-key", default=None, envvar="WINREMOTE_AUTH_KEY", help="API key for authentication")
 @click.option("--config", default=None, help="Path to winremote.toml config file")
+@click.option("--profile", default="default", type=click.Choice(["default", "chatgpt"]), help="Tool and instruction profile")
 @click.option(
     "--enable-all",
     is_flag=True,
@@ -2657,6 +2803,7 @@ def cli(
     reload: bool,
     auth_key: str | None,
     config: str | None,
+    profile: str,
     enable_all: bool,
     enable_tier3: bool,
     disable_tier2: bool,
@@ -2678,6 +2825,7 @@ def cli(
     host = _choose_value(ctx, "host", host, cfg.server.host, "127.0.0.1")
     port = int(_choose_value(ctx, "port", port, cfg.server.port, 8090))
     auth_key = _choose_value(ctx, "auth_key", auth_key, cfg.server.auth_key, None)
+    profile = _choose_value(ctx, "profile", profile, cfg.server.profile, "default")
     ssl_certfile = _choose_value(ctx, "ssl_certfile", ssl_certfile, cfg.server.ssl_certfile, None)
     ssl_keyfile = _choose_value(ctx, "ssl_keyfile", ssl_keyfile, cfg.server.ssl_keyfile, None)
     oauth_client_id = _choose_value(ctx, "oauth_client_id", oauth_client_id, cfg.security.oauth_client_id, None)
@@ -2701,12 +2849,14 @@ def cli(
     allowlist_entries = cli_allowlist if _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
 
     enabled_tools = resolve_enabled_tools(
+        profile=profile,
         enable_tier3=enable_tier3,
         disable_tier2=disable_tier2,
         enable_all=enable_all,
         explicit_tools=selected_tools,
         exclude_tools=excluded_tools,
     )
+    mcp.instructions = _server_instructions_for_profile(profile)
     _apply_tool_filter(enabled_tools)
     enabled_tiers = get_tier_names(enabled_tools)
 
@@ -2763,6 +2913,7 @@ def cli(
                 ssl_line = "[https ON]" if (ssl_certfile and ssl_keyfile) else ""
                 oauth_line = "[oauth ON]" if use_oauth else ""
                 bind_line = f"[{host}:{port}]"
+                profile_line = f"[profile: {profile}]"
                 tiers_line = f"[tiers: {','.join(enabled_tiers)}]"
                 tools_line = f"[tools: {len(enabled_tools)}/{len(ALL_TOOLS)}]"
                 pad = " " * 10  # align with uvicorn log text
@@ -2776,6 +2927,7 @@ def cli(
                     *([f"{pad}|  {ssl_line:<32s}|"] if ssl_line else []),
                     *([f"{pad}|  {oauth_line:<32s}|"] if oauth_line else []),
                     f"{pad}|  {bind_line:<32s}|",
+                    f"{pad}|  {profile_line:<32s}|",
                     f"{pad}|  {tiers_line:<16s}{tools_line:<16s}|",
                     f"{pad}+----------------------------------+",
                 ]

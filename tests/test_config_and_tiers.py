@@ -5,7 +5,7 @@ import pytest
 from winremote.config import discover_config_path, load_config
 from winremote.security import parse_ip_allowlist
 from winremote.taskmanager import TOOL_CATEGORIES, ToolCategory
-from winremote.tiers import resolve_enabled_tools
+from winremote.tiers import CHATGPT_PROFILE_TOOLS, normalize_profile_name, resolve_enabled_tools
 
 
 def test_config_loader_reads_toml(tmp_path: Path):
@@ -16,6 +16,7 @@ def test_config_loader_reads_toml(tmp_path: Path):
 host = "0.0.0.0"
 port = 9000
 auth_key = "abc"
+profile = "chatgpt"
 
 [security]
 ip_allowlist = ["127.0.0.1", "10.0.0.0/8"]
@@ -33,6 +34,7 @@ exclude = ["Type"]
     assert cfg.server.host == "0.0.0.0"
     assert cfg.server.port == 9000
     assert cfg.server.auth_key == "abc"
+    assert cfg.server.profile == "chatgpt"
     assert cfg.security.ip_allowlist == ["127.0.0.1", "10.0.0.0/8"]
     assert cfg.security.enable_tier3 is True
     assert cfg.tools.enable == ["Snapshot", "Click", "Type"]
@@ -69,11 +71,32 @@ def test_tier_resolution_flags():
 
 def test_explicit_tools_override_tiers():
     enabled = resolve_enabled_tools(
+        profile="chatgpt",
         enable_tier3=False,
         disable_tier2=True,
         explicit_tools=["snapshot", "click", "type"],
     )
     assert enabled == {"Snapshot", "Click", "Type"}
+
+
+def test_chatgpt_profile_resolution():
+    enabled = resolve_enabled_tools(profile="chatgpt")
+    assert enabled == CHATGPT_PROFILE_TOOLS
+    assert "UIAct" in enabled
+    assert "Click" not in enabled
+    assert "TaskCreate" not in enabled
+
+
+def test_chatgpt_profile_exclude_tools():
+    enabled = resolve_enabled_tools(profile="chatgpt", exclude_tools=["Shell", "FileWrite"])
+    assert "Shell" not in enabled
+    assert "FileWrite" not in enabled
+    assert "UIAct" in enabled
+
+
+def test_invalid_profile_rejected():
+    with pytest.raises(ValueError):
+        normalize_profile_name("nope")
 
 
 def test_invalid_tool_rejected():

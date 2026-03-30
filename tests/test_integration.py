@@ -100,3 +100,13 @@ class TestMCPToolRegistration:
         tools = _get_registered_tools()
         # Should have a substantial number of tools
         assert len(tools) >= 30
+
+    def test_chatgpt_profile_curated_tool_set(self):
+        from winremote.tiers import CHATGPT_PROFILE_TOOLS, resolve_enabled_tools
+
+        enabled = resolve_enabled_tools(profile="chatgpt")
+        assert enabled == CHATGPT_PROFILE_TOOLS
+        assert "UIAct" in enabled
+        assert "Snapshot" in enabled
+        assert "Click" not in enabled
+        assert "TaskCreate" not in enabled

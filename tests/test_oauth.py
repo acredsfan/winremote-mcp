@@ -13,7 +13,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from winremote.auth import AuthKeyMiddleware, OAuthOnlyMiddleware
-from winremote.oauth import OAuthStore, build_oauth_routes, validate_oauth_token
+from winremote.oauth import OAuthStore, RefreshToken, RegisteredClient, build_oauth_routes, validate_oauth_token
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -60,6 +60,8 @@ class TestOAuthMetadata:
         assert "token_endpoint" in data
         assert "registration_endpoint" in data
         assert "S256" in data["code_challenge_methods_supported"]
+        assert "refresh_token" in data["grant_types_supported"]
+        assert "offline_access" in data["scopes_supported"]
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +240,116 @@ class TestOAuthFlow:
         assert token_resp.status_code == 400
         assert token_resp.json()["error"] == "invalid_grant"
 
+    def test_offline_access_returns_refresh_token(self):
+        store = OAuthStore()
+        app = _oauth_app(store)
+        client = TestClient(app, follow_redirects=False)
+
+        reg = client.post("/oauth/register", json={"redirect_uris": ["http://localhost/cb"]})
+        client_id = reg.json()["client_id"]
+        verifier, challenge = _make_pkce()
+        auth_resp = client.get(
+            "/oauth/authorize",
+            params={
+                "client_id": client_id,
+                "redirect_uri": "http://localhost/cb",
+                "response_type": "code",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "scope": "offline_access",
+            },
+        )
+        from urllib.parse import parse_qs, urlparse
+
+        code = parse_qs(urlparse(auth_resp.headers["location"]).query)["code"][0]
+
+        token_resp = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+                "client_id": client_id,
+                "redirect_uri": "http://localhost/cb",
+            },
+        )
+        assert token_resp.status_code == 200
+        token_data = token_resp.json()
+        assert "refresh_token" in token_data
+        assert token_data["scope"] == "offline_access"
+
+    def test_refresh_token_grant(self):
+        store = OAuthStore()
+        app = _oauth_app(store)
+        client = TestClient(app, follow_redirects=False)
+
+        reg = client.post("/oauth/register", json={"redirect_uris": ["http://localhost/cb"]})
+        client_id = reg.json()["client_id"]
+        verifier, challenge = _make_pkce()
+        auth_resp = client.get(
+            "/oauth/authorize",
+            params={
+                "client_id": client_id,
+                "redirect_uri": "http://localhost/cb",
+                "response_type": "code",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "scope": "offline_access",
+            },
+        )
+        from urllib.parse import parse_qs, urlparse
+
+        code = parse_qs(urlparse(auth_resp.headers["location"]).query)["code"][0]
+        token_resp = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": verifier,
+                "client_id": client_id,
+                "redirect_uri": "http://localhost/cb",
+            },
+        )
+        refresh_token = token_resp.json()["refresh_token"]
+
+        refresh_resp = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+            },
+        )
+        assert refresh_resp.status_code == 200
+        refresh_data = refresh_resp.json()
+        assert "access_token" in refresh_data
+        assert refresh_data["refresh_token"] == refresh_token
+        assert refresh_data["scope"] == "offline_access"
+
+    def test_expired_refresh_token_rejected(self):
+        store = OAuthStore()
+        store.clients["client-1"] = RegisteredClient(client_id="client-1")
+        store.refresh_tokens["expired"] = RefreshToken(
+            token="expired",
+            client_id="client-1",
+            scope="offline_access",
+            expires_at=time.time() - 10,
+        )
+        app = _oauth_app(store)
+        client = TestClient(app)
+
+        resp = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": "expired",
+                "client_id": "client-1",
+            },
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "invalid_grant"
+        assert "expired" not in store.refresh_tokens
+
     def test_code_single_use(self):
         store = OAuthStore()
         app = _oauth_app(store)
@@ -392,6 +504,7 @@ class TestConfigSSLOAuth:
         cfg = ServerConfig()
         assert cfg.ssl_certfile is None
         assert cfg.ssl_keyfile is None
+        assert cfg.profile == "default"
 
     def test_oauth_fields_in_config(self):
         from winremote.config import SecurityConfig
@@ -408,6 +521,7 @@ class TestConfigSSLOAuth:
 [server]
 ssl_certfile = "/path/to/cert.pem"
 ssl_keyfile = "/path/to/key.pem"
+profile = "chatgpt"
 
 [security]
 oauth_client_id = "my-client"
@@ -416,5 +530,6 @@ oauth_client_secret = "my-secret"
         cfg = load_config(toml_file)
         assert cfg.server.ssl_certfile == "/path/to/cert.pem"
         assert cfg.server.ssl_keyfile == "/path/to/key.pem"
+        assert cfg.server.profile == "chatgpt"
         assert cfg.security.oauth_client_id == "my-client"
         assert cfg.security.oauth_client_secret == "my-secret"

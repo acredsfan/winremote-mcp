@@ -1044,16 +1044,34 @@ def watch_ui_elements(
     )
     key = _watch_key(window_title, include_text, max_elements, min_width, min_height)
     previous = None if reset else _UI_WATCH_BASELINES.get(key)
+    summary = summarize_ui_map(current) if current else None
+    searchable_preview = (summary or {}).get("searchable_preview", []) if summary else []
+
+    recommendations: list[str] = []
+    if reset or previous is None:
+        recommendations.append(
+            "Baseline created. Repeat UIWatch after an action to learn which controls were added, removed, moved, or renamed."
+        )
+    else:
+        recommendations.append(
+            "Use UIWatch when you expect control-level changes and ObserveScreen when you only need a compact visual-change signal."
+        )
+    if summary and summary.get("notes"):
+        recommendations.extend(summary["notes"])
 
     if reset or previous is None:
         _UI_WATCH_BASELINES[key] = current
         return {
             "window_title": window_title or None,
+            "window": current[0] if current else None,
             "baseline_created": True,
             "baseline_reset": bool(reset),
             "previous_count": 0 if previous is None else max(0, len(previous) - 1),
             "current_count": max(0, len(current) - 1),
             "diff": {"added": [], "removed": [], "moved": [], "text_changed": [], "summary": {"added": 0, "removed": 0, "moved": 0, "text_changed": 0}},
+            "summary": summary,
+            "searchable_preview": searchable_preview,
+            "recommendations": recommendations,
         }
 
     diff = diff_ui_maps(previous, current)
@@ -1061,11 +1079,15 @@ def watch_ui_elements(
         _UI_WATCH_BASELINES[key] = current
     return {
         "window_title": window_title or None,
+        "window": current[0] if current else None,
         "baseline_created": False,
         "baseline_reset": False,
         "previous_count": max(0, len(previous) - 1),
         "current_count": max(0, len(current) - 1),
         "diff": diff,
+        "summary": summary,
+        "searchable_preview": searchable_preview,
+        "recommendations": recommendations,
     }
 
 
@@ -1361,7 +1383,7 @@ def observe_screen(
         )
     if searchable_preview:
         recommendations.append(
-            "Try UIFind or UIClick with labels from searchable_preview before falling back to AnnotatedSnapshot."
+            "Try UIFind or UIAct with labels from searchable_preview before falling back to OCR or Snapshot."
         )
     if ui_summary and ui_summary.get("notes"):
         recommendations.extend(ui_summary["notes"])

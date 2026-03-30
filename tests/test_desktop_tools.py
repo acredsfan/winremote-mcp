@@ -371,6 +371,8 @@ class TestUIFind:
             payload = _parse_task_wrapped_json(result)
             assert payload["query"] == "Inventory"
             assert payload["count"] == 1
+            assert payload["target"]["mode"] == "window"
+            assert payload["search"]["searched_element_count"] == 2
             assert payload["searched_element_count"] == 2
             assert payload["monitors"][0]["monitor_id"] == 1
             assert payload["summary"]["control_count"] == 1
@@ -456,15 +458,21 @@ class TestUIWatch:
             _mock_monitor_context(mock_desktop)
             mock_desktop.watch_ui_elements.return_value = {
                 "window_title": "Roblox Studio",
+                "window": {"label": "Roblox Studio", "monitor_id": 1, "rect": {"left": 0, "top": 0, "right": 500, "bottom": 400}},
                 "baseline_created": True,
                 "baseline_reset": False,
                 "previous_count": 0,
                 "current_count": 3,
                 "diff": {"added": [], "removed": [], "moved": [], "text_changed": [], "summary": {"added": 0, "removed": 0, "moved": 0, "text_changed": 0}},
+                "summary": {"control_count": 3, "notes": []},
+                "searchable_preview": [{"label": "Inventory"}],
+                "recommendations": ["Baseline created."],
             }
             result = _call_tool("UIWatch", window_title="Roblox Studio")
             payload = _parse_task_wrapped_json(result)
             assert payload["baseline_created"] is True
+            assert payload["target"]["title"] == "Roblox Studio"
+            assert payload["search"]["searchable_preview"][0]["label"] == "Inventory"
             assert payload["monitors"][0]["monitor_id"] == 1
             assert payload["current_count"] == 3
 
@@ -529,6 +537,7 @@ class TestObserveScreen:
             payload = _parse_task_wrapped_json(result)
             assert payload["target"]["mode"] == "window"
             assert payload["baseline_created"] is True
+            assert payload["search"]["searched_element_count"] == 1
             assert payload["screen_digest"] == "abc123"
             assert payload["coordinate_spaces"]["center"].startswith("Absolute")
 
@@ -609,6 +618,7 @@ class TestUIAct:
             pyautogui.click.assert_called_with(100, 180, button="left")
             assert payload["status"] == "completed"
             assert payload["target"]["label"] == "Inventory"
+            assert payload["search"]["searched_element_count"] == 2
             assert payload["observation_after"]["changed"] is True
 
     def test_type_action_types_text(self):
@@ -663,6 +673,7 @@ class TestUIAct:
             payload = _parse_task_wrapped_json(result)
             assert payload["status"] == "no-match"
             assert payload["search"]["searched_element_count"] == 3
+            assert payload["recommendations"] == ["Try a broader query."]
 
     def test_waits_for_semantic_query_after_action(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
@@ -773,6 +784,7 @@ class TestUISequence:
             payload = _parse_task_wrapped_json(result)
             assert payload["executed_steps"] == 2
             assert payload["results"][0]["result"]["target"]["label"] == "Inventory"
+            assert payload["results"][0]["result"]["search"]["searched_element_count"] == 2
             assert payload["results"][0]["result"]["observation_after"]["changed"] is True
             assert payload["results"][1]["result"]["changed"] is False
 

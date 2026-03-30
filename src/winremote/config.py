@@ -18,6 +18,7 @@ class ServerConfig:
     auth_key: str | None = None
     ssl_certfile: str | None = None
     ssl_keyfile: str | None = None
+    profile: str = "default"
 
 
 @dataclass
@@ -67,6 +68,13 @@ def _list_of_strings(raw: object, key: str) -> list[str]:
     return raw
 
 
+def _choice_string(raw: object, key: str, *, allowed: set[str]) -> str:
+    value = str(raw).strip().lower()
+    if value not in allowed:
+        raise ValueError(f"{key} must be one of: {', '.join(sorted(allowed))}")
+    return value
+
+
 def load_config(path: Path | None) -> WinRemoteConfig:
     """Load and validate TOML config file. Returns defaults when path is None."""
     cfg = WinRemoteConfig()
@@ -92,6 +100,8 @@ def load_config(path: Path | None) -> WinRemoteConfig:
         cfg.server.ssl_certfile = str(server["ssl_certfile"]) or None
     if "ssl_keyfile" in server:
         cfg.server.ssl_keyfile = str(server["ssl_keyfile"]) or None
+    if "profile" in server:
+        cfg.server.profile = _choice_string(server["profile"], "server.profile", allowed={"default", "chatgpt"})
 
     if "ip_allowlist" in security:
         cfg.security.ip_allowlist = _list_of_strings(security["ip_allowlist"], "security.ip_allowlist")

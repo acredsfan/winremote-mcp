@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+VALID_PROFILES = {"default", "chatgpt"}
+
 TOOL_TIERS = {
     "tier1": {
         "Snapshot",
@@ -64,6 +66,28 @@ TOOL_TIERS = {
 }
 
 ALL_TOOLS = TOOL_TIERS["tier1"] | TOOL_TIERS["tier2"] | TOOL_TIERS["tier3"]
+CHATGPT_PROFILE_TOOLS = {
+    "ObserveScreen",
+    "UIFind",
+    "UIWatch",
+    "UIAct",
+    "UISequence",
+    "Snapshot",
+    "OCR",
+    "FocusWindow",
+    "App",
+    "Shortcut",
+    "Shell",
+    "FileRead",
+    "FileWrite",
+    "FileList",
+    "FileSearch",
+    "GetClipboard",
+    "SetClipboard",
+    "GetSystemInfo",
+    "ListProcesses",
+    "Notification",
+}
 _NAME_LOOKUP = {name.lower(): name for name in ALL_TOOLS}
 
 
@@ -88,8 +112,16 @@ def normalize_tool_names(tool_names: list[str]) -> list[str]:
     return normalized
 
 
+def normalize_profile_name(profile: str | None) -> str:
+    value = str(profile or "default").strip().lower()
+    if value not in VALID_PROFILES:
+        raise ValueError(f"Unknown profile: {profile}. Allowed profiles: {', '.join(sorted(VALID_PROFILES))}")
+    return value
+
+
 def resolve_enabled_tools(
     *,
+    profile: str = "default",
     enable_tier3: bool = False,
     disable_tier2: bool = False,
     enable_all: bool = False,
@@ -102,9 +134,12 @@ def resolve_enabled_tools(
     """
     explicit_tools = explicit_tools or []
     exclude_tools = exclude_tools or []
+    profile = normalize_profile_name(profile)
 
     if explicit_tools:
         enabled = set(normalize_tool_names(explicit_tools))
+    elif profile == "chatgpt":
+        enabled = set(CHATGPT_PROFILE_TOOLS)
     elif enable_all:
         enabled = set(ALL_TOOLS)
     else:

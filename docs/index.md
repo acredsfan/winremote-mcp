@@ -91,6 +91,8 @@ Enable Claude or other AI agents to:
 
 Ready to get started? Check out our [Installation Guide](installation.md) or jump straight to [Usage Examples](usage.md).
 
+If you want to use WinRemote with ChatGPT full-MCP connectors, see the dedicated [ChatGPT guide](chatgpt.md).
+
 For AI developers, see our pre-built configurations:
 - [Claude Desktop Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/claude)
 - [OpenClaw Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/openclaw)

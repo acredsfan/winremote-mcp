@@ -23,6 +23,22 @@ winremote-mcp
 
 That's it! Your Windows MCP server is now running on `http://127.0.0.1:8090` and ready to accept commands from MCP clients like Claude Desktop or OpenClaw.
 
+## ChatGPT Full-MCP Profile
+
+WinRemote now includes an opt-in `chatgpt` profile for ChatGPT full-MCP usage. It narrows the default tool set to semantic, model-friendly GUI workflows and updates the server instructions to prefer:
+
+- `ObserveScreen`, `UIFind`, `UIAct`, `UISequence`, `UIWatch`
+- `Snapshot` only when pixels are actually needed
+- semantic window targeting before raw coordinates
+
+Start it like this:
+
+```bash
+winremote-mcp --host 0.0.0.0 --ssl-certfile cert.pem --ssl-keyfile key.pem --profile chatgpt
+```
+
+For the full setup flow, including HTTPS, auth, connector creation, and prompt patterns, see [`docs/chatgpt.md`](docs/chatgpt.md).
+
 ## What's New in v0.4.9
 
 ### 🔒 HTTPS / TLS Support
@@ -195,6 +211,9 @@ pip install winremote-mcp[ocr]
 # Default: tier1 + tier2 enabled, tier3 disabled
 winremote-mcp
 
+# ChatGPT-oriented semantic-first tool profile
+winremote-mcp --profile chatgpt
+
 # Enable destructive tier3 tools
 winremote-mcp --enable-tier3
 
@@ -225,6 +244,7 @@ Search order:
 host = "127.0.0.1"
 port = 8090
 auth_key = ""
+profile = "default"     # "default" or "chatgpt"
 ssl_certfile = ""       # Path to SSL certificate for HTTPS
 ssl_keyfile = ""        # Path to SSL private key for HTTPS
 
@@ -309,6 +329,8 @@ The OAuth server implements:
 - `POST /oauth/register` — dynamic client registration (RFC 7591)
 - `GET /oauth/authorize` — Authorization Code + PKCE (RFC 7636)
 - `POST /oauth/token` — token exchange
+
+If a client requests `offline_access`, WinRemote also issues refresh tokens and supports the `refresh_token` grant for long-lived remote connectors such as ChatGPT full-MCP setups.
 
 ### Health check
 ```bash

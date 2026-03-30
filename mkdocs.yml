@@ -68,6 +68,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Installation: installation.md
+  - ChatGPT: chatgpt.md
   - Usage: usage.md
   - API Reference: api.md
   - FAQ: faq.md

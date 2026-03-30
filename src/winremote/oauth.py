@@ -39,6 +39,7 @@ class AuthorizationCode:
     redirect_uri: str
     code_challenge: str
     code_challenge_method: str
+    scope: str = ""
     expires_at: float = 0.0
 
 
@@ -46,6 +47,15 @@ class AuthorizationCode:
 class AccessToken:
     token: str
     client_id: str
+    scope: str = ""
+    expires_at: float = 0.0
+
+
+@dataclass
+class RefreshToken:
+    token: str
+    client_id: str
+    scope: str = ""
     expires_at: float = 0.0
 
 
@@ -56,6 +66,7 @@ class OAuthStore:
         self.clients: dict[str, RegisteredClient] = {}
         self.codes: dict[str, AuthorizationCode] = {}
         self.tokens: dict[str, AccessToken] = {}
+        self.refresh_tokens: dict[str, RefreshToken] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +96,53 @@ def _verify_pkce(code_verifier: str, code_challenge: str, method: str) -> bool:
 
 
 TOKEN_LIFETIME = 3600  # 1 hour
+REFRESH_TOKEN_LIFETIME = 30 * 24 * 3600  # 30 days
 CODE_LIFETIME = 300  # 5 minutes
+
+
+def _normalize_scope(scope: str | None) -> str:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for item in str(scope or "").split():
+        value = item.strip()
+        if value and value not in seen:
+            seen.add(value)
+            parts.append(value)
+    return " ".join(parts)
+
+
+def _scope_contains(scope: str | None, item: str) -> bool:
+    return item in set(_normalize_scope(scope).split())
+
+
+def _issue_token_response(store: OAuthStore, *, client_id: str, scope: str, include_refresh: bool) -> dict:
+    access_token = secrets.token_urlsafe(48)
+    store.tokens[access_token] = AccessToken(
+        token=access_token,
+        client_id=client_id,
+        scope=scope,
+        expires_at=time.time() + TOKEN_LIFETIME,
+    )
+
+    response: dict[str, str | int] = {
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": TOKEN_LIFETIME,
+    }
+    if scope:
+        response["scope"] = scope
+
+    if include_refresh:
+        refresh_token = secrets.token_urlsafe(48)
+        store.refresh_tokens[refresh_token] = RefreshToken(
+            token=refresh_token,
+            client_id=client_id,
+            scope=scope,
+            expires_at=time.time() + REFRESH_TOKEN_LIFETIME,
+        )
+        response["refresh_token"] = refresh_token
+
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +169,10 @@ def build_oauth_routes(
                 "token_endpoint": f"{issuer}/oauth/token",
                 "registration_endpoint": f"{issuer}/oauth/register",
                 "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
                 "code_challenge_methods_supported": ["S256", "plain"],
                 "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+                "scopes_supported": ["offline_access"],
             }
         )
 
@@ -170,6 +228,7 @@ def build_oauth_routes(
         redirect_uri = params.get("redirect_uri", "")
         response_type = params.get("response_type", "")
         state = params.get("state", "")
+        scope = _normalize_scope(params.get("scope", ""))
         code_challenge = params.get("code_challenge", "")
         code_challenge_method = params.get("code_challenge_method", "S256")
 
@@ -207,6 +266,7 @@ def build_oauth_routes(
             redirect_uri=redirect_uri,
             code_challenge=code_challenge,
             code_challenge_method=code_challenge_method,
+            scope=scope,
             expires_at=time.time() + CODE_LIFETIME,
         )
 
@@ -235,61 +295,71 @@ def build_oauth_routes(
                 return JSONResponse({"error": "invalid_request"}, status_code=400)
 
         grant_type = body.get("grant_type", "")
-        if grant_type != "authorization_code":
-            return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
-
-        code_value = body.get("code", "")
-        code_verifier = body.get("code_verifier", "")
         client_id = body.get("client_id", "")
-        redirect_uri = body.get("redirect_uri", "")
-
-        auth_code = store.codes.get(code_value)
-        if not auth_code:
-            return JSONResponse({"error": "invalid_grant", "error_description": "unknown code"}, status_code=400)
-
-        # Validate
-        if auth_code.client_id != client_id:
-            return JSONResponse({"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400)
-
-        if auth_code.redirect_uri != redirect_uri:
-            return JSONResponse(
-                {"error": "invalid_grant", "error_description": "redirect_uri mismatch"}, status_code=400
-            )
-
-        if time.time() > auth_code.expires_at:
-            del store.codes[code_value]
-            return JSONResponse({"error": "invalid_grant", "error_description": "code expired"}, status_code=400)
-
-        if not _verify_pkce(code_verifier, auth_code.code_challenge, auth_code.code_challenge_method):
-            return JSONResponse(
-                {"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400
-            )
-
-        # Consume code (one-time use)
-        del store.codes[code_value]
-
-        # Validate client_secret if configured
         client = store.clients.get(client_id)
         if client and client.client_secret:
             provided_secret = body.get("client_secret", "")
             if provided_secret and not secrets.compare_digest(provided_secret, client.client_secret):
                 return JSONResponse({"error": "invalid_client"}, status_code=401)
 
-        # Issue access token
-        access_token = secrets.token_urlsafe(48)
-        store.tokens[access_token] = AccessToken(
-            token=access_token,
-            client_id=client_id,
-            expires_at=time.time() + TOKEN_LIFETIME,
-        )
+        if grant_type == "authorization_code":
+            code_value = body.get("code", "")
+            code_verifier = body.get("code_verifier", "")
+            redirect_uri = body.get("redirect_uri", "")
 
-        return JSONResponse(
-            {
-                "access_token": access_token,
-                "token_type": "Bearer",
-                "expires_in": TOKEN_LIFETIME,
-            }
-        )
+            auth_code = store.codes.get(code_value)
+            if not auth_code:
+                return JSONResponse({"error": "invalid_grant", "error_description": "unknown code"}, status_code=400)
+
+            if auth_code.client_id != client_id:
+                return JSONResponse({"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400)
+
+            if auth_code.redirect_uri != redirect_uri:
+                return JSONResponse(
+                    {"error": "invalid_grant", "error_description": "redirect_uri mismatch"}, status_code=400
+                )
+
+            if time.time() > auth_code.expires_at:
+                del store.codes[code_value]
+                return JSONResponse({"error": "invalid_grant", "error_description": "code expired"}, status_code=400)
+
+            if not _verify_pkce(code_verifier, auth_code.code_challenge, auth_code.code_challenge_method):
+                return JSONResponse(
+                    {"error": "invalid_grant", "error_description": "PKCE verification failed"}, status_code=400
+                )
+
+            del store.codes[code_value]
+            response = _issue_token_response(
+                store,
+                client_id=client_id,
+                scope=auth_code.scope,
+                include_refresh=_scope_contains(auth_code.scope, "offline_access"),
+            )
+            return JSONResponse(response)
+
+        if grant_type == "refresh_token":
+            refresh_token_value = body.get("refresh_token", "")
+            refresh_token = store.refresh_tokens.get(refresh_token_value)
+            if not refresh_token:
+                return JSONResponse({"error": "invalid_grant", "error_description": "unknown refresh_token"}, status_code=400)
+
+            if refresh_token.client_id != client_id:
+                return JSONResponse({"error": "invalid_grant", "error_description": "client_id mismatch"}, status_code=400)
+
+            if time.time() > refresh_token.expires_at:
+                del store.refresh_tokens[refresh_token_value]
+                return JSONResponse({"error": "invalid_grant", "error_description": "refresh_token expired"}, status_code=400)
+
+            response = _issue_token_response(
+                store,
+                client_id=client_id,
+                scope=refresh_token.scope,
+                include_refresh=False,
+            )
+            response["refresh_token"] = refresh_token_value
+            return JSONResponse(response)
+
+        return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
 
     return {
         "/.well-known/oauth-authorization-server": (metadata, ["GET"]),
