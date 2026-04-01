@@ -1,9 +1,9 @@
 {
-  "mcpServers": {
-    "winremote": {
-      "command": "python",
-      "args": ["-m", "winremote", "--transport", "stdio"],
-      "env": {}
-    }
-  }
+	"servers": {
+		"winremote": {
+		"command": "python",
+		"args": ["-m", "winremote", "--transport", "stdio"],
+		"env": {}
+		}
+	}
 }
