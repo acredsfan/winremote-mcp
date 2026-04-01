@@ -7,25 +7,13 @@ WinRemote's `chatgpt` profile is for ChatGPT full-MCP chat usage against a remot
 ChatGPT requires a remote MCP endpoint. In practice, use HTTPS and expose the server on a reachable host/IP:
 
 ```bash
-winremote-mcp \
-  --host 0.0.0.0 \
-  --port 8090 \
-  --ssl-certfile cert.pem \
-  --ssl-keyfile key.pem \
-  --profile chatgpt
+winremote-mcp --host 0.0.0.0 --port 8090 --ssl-certfile cert.pem --ssl-keyfile key.pem --profile chatgpt --auth-key "your-secret-key"
 ```
 
 If you want OAuth instead of a static bearer key:
 
 ```bash
-winremote-mcp \
-  --host 0.0.0.0 \
-  --port 8090 \
-  --ssl-certfile cert.pem \
-  --ssl-keyfile key.pem \
-  --oauth-client-id my-client \
-  --oauth-client-secret my-secret \
-  --profile chatgpt
+winremote-mcp --host 0.0.0.0 --port 8090 --ssl-certfile cert.pem --ssl-keyfile key.pem --oauth-client-id my-client --oauth-client-secret my-secret --profile chatgpt
 ```
 
 ## Config File
