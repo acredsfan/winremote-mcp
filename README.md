@@ -7,7 +7,7 @@
 [![Downloads](https://static.pepy.tech/badge/winremote-mcp)](https://pepy.tech/projects/winremote-mcp)
 [![win-remote-mcp MCP server](https://glama.ai/mcp/servers/dddabtc/win-remote-mcp/badges/score.svg)](https://glama.ai/mcp/servers/dddabtc/win-remote-mcp)
 
-**The ultimate Windows MCP server for remote desktop control and automation.** Control any Windows machine through the Model Context Protocol — perfect for AI agents, Claude Desktop, and OpenClaw integration. Transform your Windows desktop into a powerful, remotely-accessible automation endpoint.
+**The ultimate Windows MCP server for remote desktop control and automation.** Control any Windows machine through the Model Context Protocol — perfect for AI agents, Claude Desktop, GitHub Copilot Chat, and OpenClaw integration. Transform your Windows desktop into a powerful, remotely-accessible automation endpoint.
 
 Run **on the Windows machine** you want to control. Built with [FastMCP](https://github.com/jlowin/fastmcp) and the [Model Context Protocol](https://modelcontextprotocol.io/).
 
@@ -39,9 +39,21 @@ winremote-mcp --host 0.0.0.0 --ssl-certfile cert.pem --ssl-keyfile key.pem --pro
 
 For the full setup flow, including HTTPS, auth, connector creation, and prompt patterns, see [`docs/chatgpt.md`](docs/chatgpt.md).
 
+## GitHub Copilot Chat Profile
+
+WinRemote also includes a `copilot` profile tuned for GitHub Copilot Chat in VS Code Insiders. It keeps the semantic GUI, app-launching, and Roblox Studio tooling that Copilot needs for human-style desktop workflows, while leaving repo editing and terminal work to Copilot's built-in workspace tools.
+
+Start it directly with the Copilot launcher:
+
+```bash
+winremote-mcp copilot-launch
+```
+
+That launcher starts the Roblox Studio harness automatically if it is not already healthy, then serves WinRemote to Copilot over stdio using the `copilot` profile. For the full VS Code Insiders setup, see [`docs/copilot-chat.md`](docs/copilot-chat.md).
+
 ## Roblox Studio Playtest Harness
 
-WinRemote can now pair its `RobloxStudio*` MCP tools with a local harness so ChatGPT can run Studio playtests, read structured state, reset characters, teleport to checkpoints, and run named tests without manual intervention.
+WinRemote can now pair its `RobloxStudio*` MCP tools with a local harness so ChatGPT or GitHub Copilot Chat can run Studio playtests, read structured state, reset characters, teleport to checkpoints, and run named tests without manual intervention.
 
 Start the local harness on the Windows machine:
 
@@ -245,6 +257,9 @@ winremote-mcp
 # ChatGPT-oriented semantic-first tool profile
 winremote-mcp --profile chatgpt
 
+# GitHub Copilot Chat desktop-first tool profile
+winremote-mcp --profile copilot
+
 # Enable destructive tier3 tools
 winremote-mcp --enable-tier3
 
@@ -275,7 +290,7 @@ Search order:
 host = "127.0.0.1"
 port = 8090
 auth_key = ""
-profile = "default"     # "default" or "chatgpt"
+profile = "default"     # "default", "chatgpt", or "copilot"
 ssl_certfile = ""       # Path to SSL certificate for HTTPS
 ssl_keyfile = ""        # Path to SSL private key for HTTPS
 
@@ -415,6 +430,16 @@ winremote-mcp install
 # Remove scheduled task  
 winremote-mcp uninstall
 ```
+
+### VS Code Insiders auto-start for Copilot Chat
+
+This repository now includes a workspace `.vscode/mcp.json` entry that launches:
+
+```bash
+winremote-mcp copilot-launch
+```
+
+That means VS Code Insiders can auto-start the WinRemote MCP server and the Roblox Studio harness together for Copilot Chat, without manually launching the harness in a separate terminal.
 
 ## Security
 

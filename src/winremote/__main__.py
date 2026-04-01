@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,16 @@ CHATGPT_SERVER_INSTRUCTIONS = (
     "AnnotatedSnapshot. Use Snapshot only when pixels are actually required. FocusWindow "
     "or App should target the app before interaction. Use Click, Type, Move, Scroll, and "
     "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough."
+)
+
+COPILOT_SERVER_INSTRUCTIONS = (
+    "Windows Remote MCP Server for GitHub Copilot Chat workflows inside VS Code Insiders. "
+    "Copilot already has strong workspace editing and terminal tools, so prefer those for repo changes. "
+    "Use this MCP server for desktop interaction like a human developer: focusing windows, launching apps, "
+    "driving custom GUIs, operating Roblox Studio, running playtests, and querying the Roblox Studio harness. "
+    "Prefer semantic GUI tools first: ObserveScreen, UIFind, UIAct, UISequence, UIWatch, and UIMap. "
+    "Use Snapshot only when pixels are actually required, and use Click, Type, Move, Scroll, and Shortcut "
+    "as fallbacks for custom-drawn interfaces."
 )
 
 mcp = FastMCP(
@@ -108,7 +119,11 @@ def _ui_coordinate_spaces() -> dict[str, str]:
 
 def _server_instructions_for_profile(profile: str) -> str:
     """Return profile-specific server instructions."""
-    return CHATGPT_SERVER_INSTRUCTIONS if profile == "chatgpt" else DEFAULT_SERVER_INSTRUCTIONS
+    if profile == "chatgpt":
+        return CHATGPT_SERVER_INSTRUCTIONS
+    if profile == "copilot":
+        return COPILOT_SERVER_INSTRUCTIONS
+    return DEFAULT_SERVER_INSTRUCTIONS
 
 
 def _trim_recommendations(recommendations: list[str] | None, limit: int = 4) -> list[str]:
@@ -3488,6 +3503,210 @@ def _apply_tool_filter(enabled_tools: set[str]) -> None:
             _remove_tool(tool_name)
 
 
+def _harness_url(host: str, port: int) -> str:
+    """Return the Roblox Studio harness base URL."""
+    return f"http://{host}:{int(port)}"
+
+
+def _is_harness_healthy(*, host: str = "127.0.0.1", port: int = 51234, timeout_seconds: float = 1.0) -> bool:
+    """Return whether the Roblox Studio harness is responding on the expected URL."""
+    payload = roblox_studio.harness_request(
+        "GET",
+        "/health",
+        harness_url=_harness_url(host, port),
+        timeout=timeout_seconds,
+    )
+    data = payload.get("data") or {}
+    return bool(payload.get("ok")) and str(data.get("status") or "").lower() == "ok"
+
+
+def _launch_harness_process(*, host: str = "127.0.0.1", port: int = 51234, stale_after: float = 5.0, max_events: int = 100) -> subprocess.Popen:
+    """Launch the Roblox Studio harness as a detached background process."""
+    command = [
+        sys.executable,
+        "-m",
+        "winremote",
+        "roblox-studio",
+        "serve-harness",
+        "--host",
+        host,
+        "--port",
+        str(int(port)),
+        "--stale-after",
+        str(float(stale_after)),
+        "--max-events",
+        str(int(max_events)),
+    ]
+    popen_kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if platform.system() == "Windows":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
+            subprocess,
+            "DETACHED_PROCESS",
+            0,
+        )
+    return subprocess.Popen(command, **popen_kwargs)
+
+
+def _ensure_copilot_harness_running(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 51234,
+    stale_after: float = 5.0,
+    max_events: int = 100,
+    startup_timeout: float = 5.0,
+    poll_interval: float = 0.2,
+) -> bool:
+    """Ensure the Roblox Studio harness is running for Copilot Chat workflows."""
+    if _is_harness_healthy(host=host, port=port):
+        return False
+
+    _launch_harness_process(host=host, port=port, stale_after=stale_after, max_events=max_events)
+    deadline = time.monotonic() + max(0.5, float(startup_timeout))
+    while time.monotonic() < deadline:
+        if _is_harness_healthy(host=host, port=port):
+            return True
+        time.sleep(max(0.05, float(poll_interval)))
+
+    raise click.ClickException(
+        "Roblox Studio harness did not become healthy in time. "
+        f"Expected it at {_harness_url(host, port)}/health."
+    )
+
+
+def _run_mcp_server(
+    *,
+    transport: str,
+    host: str,
+    port: int,
+    reload: bool,
+    auth_key: str | None,
+    profile: str,
+    enable_all: bool,
+    enable_tier3: bool,
+    disable_tier2: bool,
+    selected_tools: list[str],
+    excluded_tools: list[str],
+    allowlist_entries: list[str],
+    ssl_certfile: str | None,
+    ssl_keyfile: str | None,
+    oauth_client_id: str | None,
+    oauth_client_secret: str | None,
+) -> None:
+    """Start the MCP server after configuration has been resolved."""
+    enabled_tools = resolve_enabled_tools(
+        profile=profile,
+        enable_tier3=enable_tier3,
+        disable_tier2=disable_tier2,
+        enable_all=enable_all,
+        explicit_tools=selected_tools,
+        exclude_tools=excluded_tools,
+    )
+    mcp.instructions = _server_instructions_for_profile(profile)
+    _apply_tool_filter(enabled_tools)
+    enabled_tiers = get_tier_names(enabled_tools)
+
+    oauth_store = None
+    oauth_validator = None
+    use_oauth = bool(oauth_client_id or oauth_client_secret)
+
+    if use_oauth and transport != "stdio":
+        from winremote.oauth import OAuthStore, build_oauth_routes, validate_oauth_token
+
+        oauth_store = OAuthStore()
+        scheme = "https" if (ssl_certfile and ssl_keyfile) else "http"
+        issuer = f"{scheme}://{host}:{port}"
+
+        routes = build_oauth_routes(
+            store=oauth_store,
+            issuer=issuer,
+            configured_client_id=oauth_client_id,
+            configured_client_secret=oauth_client_secret,
+        )
+        for path, (handler, methods) in routes.items():
+            mcp.custom_route(path, methods=methods)(handler)
+
+        oauth_validator = lambda tok: validate_oauth_token(oauth_store, tok)  # noqa: E731
+
+    middleware: list[Middleware] = []
+
+    if allowlist_entries:
+        allowlist_networks = parse_ip_allowlist(allowlist_entries)
+        middleware.append(Middleware(IPAllowlistMiddleware, allowlist=allowlist_networks))
+
+    if auth_key:
+        from winremote.auth import AuthKeyMiddleware
+
+        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
+    elif oauth_validator:
+        from winremote.auth import OAuthOnlyMiddleware
+
+        middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
+
+    import logging
+
+    class BannerFilter(logging.Filter):
+        """Inject our banner after uvicorn's 'Application startup complete' log."""
+
+        _shown = False
+
+        def filter(self, record):
+            if not self._shown and "Application startup complete" in record.getMessage():
+                self._shown = True
+                auth_line = "[auth ON]" if auth_key else "[no auth]"
+                ssl_line = "[https ON]" if (ssl_certfile and ssl_keyfile) else ""
+                oauth_line = "[oauth ON]" if use_oauth else ""
+                bind_line = f"[{host}:{port}]"
+                profile_line = f"[profile: {profile}]"
+                tiers_line = f"[tiers: {','.join(enabled_tiers)}]"
+                tools_line = f"[tools: {len(enabled_tools)}/{len(ALL_TOOLS)}]"
+                pad = " " * 10
+                ver_line = f"winremote-mcp v{__version__}"
+                lines = [
+                    f"{pad}+----------------------------------+",
+                    f"{pad}|  {ver_line:<32s}|",
+                    f"{pad}|  by dddabtc                      |",
+                    f"{pad}|  github.com/dddabtc              |",
+                    f"{pad}|  {auth_line:<32s}|",
+                    *([f"{pad}|  {ssl_line:<32s}|"] if ssl_line else []),
+                    *([f"{pad}|  {oauth_line:<32s}|"] if oauth_line else []),
+                    f"{pad}|  {bind_line:<32s}|",
+                    f"{pad}|  {profile_line:<32s}|",
+                    f"{pad}|  {tiers_line:<16s}{tools_line:<16s}|",
+                    f"{pad}+----------------------------------+",
+                ]
+                if host == "0.0.0.0" and not auth_key:
+                    lines.append(f"{pad}  WARNING: open to network without auth!")
+                    lines.append(f"{pad}  Use --auth-key for security.")
+                if enable_all:
+                    lines.append(f"{pad}  INFO: High-risk Tier 3 tools enabled!")
+                print("\n" + "\n".join(lines) + "\n", flush=True)
+            return True
+
+    if transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        logging.getLogger("uvicorn.error").addFilter(BannerFilter())
+        run_kwargs = dict(transport="streamable-http", host=host, port=port)
+        if middleware:
+            run_kwargs["middleware"] = middleware
+        if platform.system() == "Windows":
+            os.environ.setdefault("NO_COLOR", "1")
+        uvicorn_config = {}
+        if reload:
+            uvicorn_config["reload"] = True
+        if ssl_certfile and ssl_keyfile:
+            uvicorn_config["ssl_certfile"] = ssl_certfile
+            uvicorn_config["ssl_keyfile"] = ssl_keyfile
+        if uvicorn_config:
+            run_kwargs["uvicorn_config"] = uvicorn_config
+        mcp.run(**run_kwargs)
+
+
 # ================================== CLI ====================================
 
 
@@ -3498,7 +3717,7 @@ def _apply_tool_filter(enabled_tools: set[str]) -> None:
 @click.option("--reload", is_flag=True, default=False, help="Enable hot reload (streamable-http only)")
 @click.option("--auth-key", default=None, envvar="WINREMOTE_AUTH_KEY", help="API key for authentication")
 @click.option("--config", default=None, help="Path to winremote.toml config file")
-@click.option("--profile", default="default", type=click.Choice(["default", "chatgpt"]), help="Tool and instruction profile")
+@click.option("--profile", default="default", type=click.Choice(["default", "chatgpt", "copilot"]), help="Tool and instruction profile")
 @click.option(
     "--enable-all",
     is_flag=True,
@@ -3568,115 +3787,67 @@ def cli(
     excluded_tools = cli_excluded if _param_explicit(ctx, "exclude_tools") else cfg.tools.exclude
     allowlist_entries = cli_allowlist if _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
 
-    enabled_tools = resolve_enabled_tools(
+    _run_mcp_server(
+        transport=transport,
+        host=host,
+        port=port,
+        reload=reload,
+        auth_key=auth_key,
         profile=profile,
+        enable_all=enable_all,
         enable_tier3=enable_tier3,
         disable_tier2=disable_tier2,
-        enable_all=enable_all,
-        explicit_tools=selected_tools,
-        exclude_tools=excluded_tools,
+        selected_tools=selected_tools,
+        excluded_tools=excluded_tools,
+        allowlist_entries=allowlist_entries,
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
+        oauth_client_id=oauth_client_id,
+        oauth_client_secret=oauth_client_secret,
     )
-    mcp.instructions = _server_instructions_for_profile(profile)
-    _apply_tool_filter(enabled_tools)
-    enabled_tiers = get_tier_names(enabled_tools)
 
-    # ---- OAuth setup ----
-    oauth_store = None
-    oauth_validator = None
-    use_oauth = bool(oauth_client_id or oauth_client_secret)
 
-    if use_oauth and transport != "stdio":
-        from winremote.oauth import OAuthStore, build_oauth_routes, validate_oauth_token
-
-        oauth_store = OAuthStore()
-        scheme = "https" if (ssl_certfile and ssl_keyfile) else "http"
-        issuer = f"{scheme}://{host}:{port}"
-
-        routes = build_oauth_routes(
-            store=oauth_store,
-            issuer=issuer,
-            configured_client_id=oauth_client_id,
-            configured_client_secret=oauth_client_secret,
+@cli.command(name="copilot-launch")
+@click.option("--harness-host", default="127.0.0.1", help="Bind address for the local Roblox Studio harness")
+@click.option("--harness-port", default=51234, type=int, help="Bind port for the local Roblox Studio harness")
+@click.option("--harness-stale-after", default=5.0, type=float, help="Seconds before a Studio client is treated as disconnected")
+@click.option("--harness-max-events", default=100, type=int, help="Maximum recent harness events to retain in memory")
+@click.option("--skip-harness", is_flag=True, default=False, help="Start only the Copilot MCP server and do not auto-launch the Roblox Studio harness")
+def copilot_launch(
+    harness_host: str,
+    harness_port: int,
+    harness_stale_after: float,
+    harness_max_events: int,
+    skip_harness: bool,
+) -> None:
+    """Launch the Copilot Chat stdio server and auto-start the Roblox harness if needed."""
+    if not skip_harness:
+        os.environ.setdefault("WINREMOTE_ROBLOX_STUDIO_HARNESS_URL", _harness_url(harness_host, harness_port))
+        _ensure_copilot_harness_running(
+            host=harness_host,
+            port=harness_port,
+            stale_after=harness_stale_after,
+            max_events=harness_max_events,
         )
-        for path, (handler, methods) in routes.items():
-            mcp.custom_route(path, methods=methods)(handler)
 
-        oauth_validator = lambda tok: validate_oauth_token(oauth_store, tok)  # noqa: E731
-
-    # ---- Middleware ----
-    middleware: list[Middleware] = []
-
-    if allowlist_entries:
-        allowlist_networks = parse_ip_allowlist(allowlist_entries)
-        middleware.append(Middleware(IPAllowlistMiddleware, allowlist=allowlist_networks))
-
-    if auth_key:
-        from winremote.auth import AuthKeyMiddleware
-
-        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
-    elif oauth_validator:
-        from winremote.auth import OAuthOnlyMiddleware
-
-        middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
-
-    import logging
-
-    class BannerFilter(logging.Filter):
-        """Inject our banner after uvicorn's 'Application startup complete' log."""
-
-        _shown = False
-
-        def filter(self, record):
-            if not self._shown and "Application startup complete" in record.getMessage():
-                self._shown = True
-                auth_line = "[auth ON]" if auth_key else "[no auth]"
-                ssl_line = "[https ON]" if (ssl_certfile and ssl_keyfile) else ""
-                oauth_line = "[oauth ON]" if use_oauth else ""
-                bind_line = f"[{host}:{port}]"
-                profile_line = f"[profile: {profile}]"
-                tiers_line = f"[tiers: {','.join(enabled_tiers)}]"
-                tools_line = f"[tools: {len(enabled_tools)}/{len(ALL_TOOLS)}]"
-                pad = " " * 10  # align with uvicorn log text
-                ver_line = f"winremote-mcp v{__version__}"
-                lines = [
-                    f"{pad}+----------------------------------+",
-                    f"{pad}|  {ver_line:<32s}|",
-                    f"{pad}|  by dddabtc                      |",
-                    f"{pad}|  github.com/dddabtc              |",
-                    f"{pad}|  {auth_line:<32s}|",
-                    *([f"{pad}|  {ssl_line:<32s}|"] if ssl_line else []),
-                    *([f"{pad}|  {oauth_line:<32s}|"] if oauth_line else []),
-                    f"{pad}|  {bind_line:<32s}|",
-                    f"{pad}|  {profile_line:<32s}|",
-                    f"{pad}|  {tiers_line:<16s}{tools_line:<16s}|",
-                    f"{pad}+----------------------------------+",
-                ]
-                if host == "0.0.0.0" and not auth_key:
-                    lines.append(f"{pad}  WARNING: open to network without auth!")
-                    lines.append(f"{pad}  Use --auth-key for security.")
-                if enable_all:
-                    lines.append(f"{pad}  INFO: High-risk Tier 3 tools enabled!")
-                print("\n" + "\n".join(lines) + "\n", flush=True)
-            return True
-
-    if transport == "stdio":
-        mcp.run(transport="stdio")
-    else:
-        logging.getLogger("uvicorn.error").addFilter(BannerFilter())
-        run_kwargs = dict(transport="streamable-http", host=host, port=port)
-        if middleware:
-            run_kwargs["middleware"] = middleware
-        if platform.system() == "Windows":
-            os.environ.setdefault("NO_COLOR", "1")
-        uvicorn_config = {}
-        if reload:
-            uvicorn_config["reload"] = True
-        if ssl_certfile and ssl_keyfile:
-            uvicorn_config["ssl_certfile"] = ssl_certfile
-            uvicorn_config["ssl_keyfile"] = ssl_keyfile
-        if uvicorn_config:
-            run_kwargs["uvicorn_config"] = uvicorn_config
-        mcp.run(**run_kwargs)
+    _run_mcp_server(
+        transport="stdio",
+        host="127.0.0.1",
+        port=8090,
+        reload=False,
+        auth_key=None,
+        profile="copilot",
+        enable_all=False,
+        enable_tier3=False,
+        disable_tier2=False,
+        selected_tools=[],
+        excluded_tools=[],
+        allowlist_entries=[],
+        ssl_certfile=None,
+        ssl_keyfile=None,
+        oauth_client_id=None,
+        oauth_client_secret=None,
+    )
 
 
 @cli.command()

@@ -136,3 +136,16 @@ class TestMCPToolRegistration:
         assert "RobloxStudioRunPlaytest" in enabled
         assert "WaitForImageChange" in enabled
         assert "TaskCreate" not in enabled
+
+    def test_copilot_profile_curated_tool_set(self):
+        from winremote.tiers import COPILOT_PROFILE_TOOLS, resolve_enabled_tools
+
+        enabled = resolve_enabled_tools(profile="copilot")
+        assert enabled == COPILOT_PROFILE_TOOLS
+        assert "UIAct" in enabled
+        assert "Snapshot" in enabled
+        assert "App" in enabled
+        assert "RobloxStudioRunPlaytest" in enabled
+        assert "RobloxStudioRunNamedTest" in enabled
+        assert "Shell" not in enabled
+        assert "FileWrite" not in enabled

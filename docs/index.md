@@ -2,7 +2,7 @@
 
 **The ultimate Windows MCP server for remote desktop control and automation.**
 
-Control any Windows machine through the Model Context Protocol — perfect for AI agents, Claude Desktop, and OpenClaw integration. Transform your Windows desktop into a powerful, remotely-accessible automation endpoint.
+Control any Windows machine through the Model Context Protocol — perfect for AI agents, Claude Desktop, GitHub Copilot Chat, and OpenClaw integration. Transform your Windows desktop into a powerful, remotely-accessible automation endpoint.
 
 ## Quick Start
 
@@ -48,7 +48,7 @@ WinRemote MCP is a Model Context Protocol (MCP) server that enables AI agents an
 
 ### 🤖 AI Agent Ready
 - Native MCP protocol support
-- Ready-to-use configs for Claude Desktop, OpenClaw, Cursor
+- Ready-to-use configs for Claude Desktop, GitHub Copilot Chat, OpenClaw, Cursor
 - Comprehensive error handling and helpful messages
 - Structured tool responses perfect for AI parsing
 
@@ -93,7 +93,10 @@ Ready to get started? Check out our [Installation Guide](installation.md) or jum
 
 If you want to use WinRemote with ChatGPT full-MCP connectors, see the dedicated [ChatGPT guide](chatgpt.md).
 
+If you want to use WinRemote with GitHub Copilot Chat in VS Code Insiders, see the dedicated [GitHub Copilot Chat guide](copilot-chat.md).
+
 For AI developers, see our pre-built configurations:
 - [Claude Desktop Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/claude)
+- [GitHub Copilot Chat Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/copilot)
 - [OpenClaw Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/openclaw)
 - [Cursor Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/cursor)

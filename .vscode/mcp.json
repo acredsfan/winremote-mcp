@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "winremoteCopilot": {
+      "command": "python",
+      "args": [
+        "-m",
+        "winremote",
+        "copilot-launch"
+      ],
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/src",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}

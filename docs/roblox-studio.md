@@ -97,12 +97,12 @@ return false, { message = "failed because ..." }
 
 ## Typical Flow
 
-1. Start `winremote-mcp --profile chatgpt`
-2. Start `winremote-mcp roblox-studio serve-harness`
+1. Start `winremote-mcp --profile chatgpt` or let VS Code Insiders run `winremote-mcp copilot-launch`
+2. If you are not using `copilot-launch`, start `winremote-mcp roblox-studio serve-harness`
 3. Open Roblox Studio
 4. Put the exported harness files into `ServerScriptService`
 5. Enable HTTP requests in Studio settings
-6. Let ChatGPT edit code, launch playtests, and call `RobloxStudioGetTestState` or `RobloxStudioRunNamedTest`
+6. Let ChatGPT or GitHub Copilot Chat edit code, launch playtests, and call `RobloxStudioGetTestState` or `RobloxStudioRunNamedTest`
 
 ## Recommended Tool Usage
 

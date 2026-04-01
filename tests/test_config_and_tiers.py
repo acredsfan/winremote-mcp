@@ -5,7 +5,7 @@ import pytest
 from winremote.config import discover_config_path, load_config
 from winremote.security import parse_ip_allowlist
 from winremote.taskmanager import TOOL_CATEGORIES, ToolCategory
-from winremote.tiers import CHATGPT_PROFILE_TOOLS, normalize_profile_name, resolve_enabled_tools
+from winremote.tiers import CHATGPT_PROFILE_TOOLS, COPILOT_PROFILE_TOOLS, normalize_profile_name, resolve_enabled_tools
 
 
 def test_config_loader_reads_toml(tmp_path: Path):
@@ -95,6 +95,24 @@ def test_chatgpt_profile_exclude_tools():
     enabled = resolve_enabled_tools(profile="chatgpt", exclude_tools=["Shell", "FileWrite"])
     assert "Shell" not in enabled
     assert "FileWrite" not in enabled
+    assert "UIAct" in enabled
+
+
+def test_copilot_profile_resolution():
+    enabled = resolve_enabled_tools(profile="copilot")
+    assert enabled == COPILOT_PROFILE_TOOLS
+    assert "UIAct" in enabled
+    assert "App" in enabled
+    assert "RobloxStudioRunPlaytest" in enabled
+    assert "RobloxStudioRunNamedTest" in enabled
+    assert "Shell" not in enabled
+    assert "FileWrite" not in enabled
+
+
+def test_copilot_profile_exclude_tools():
+    enabled = resolve_enabled_tools(profile="copilot", exclude_tools=["Notification", "GetClipboard"])
+    assert "Notification" not in enabled
+    assert "GetClipboard" not in enabled
     assert "UIAct" in enabled
 
 

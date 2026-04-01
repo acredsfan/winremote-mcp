@@ -39,6 +39,23 @@ winremote-mcp --host 0.0.0.0
 
 ## MCP Client Configuration
 
+### GitHub Copilot Chat (VS Code Insiders)
+
+This repository includes a workspace `.vscode/mcp.json` entry for Copilot Chat. It launches:
+
+```json
+{
+  "servers": {
+    "winremoteCopilot": {
+      "command": "python",
+      "args": ["-m", "winremote", "copilot-launch"]
+    }
+  }
+}
+```
+
+The `copilot-launch` command starts the `copilot` profile over stdio and auto-starts the Roblox Studio harness in the background if it is not already running.
+
 ### Claude Desktop
 
 Edit your `claude_desktop_config.json`:
@@ -359,6 +376,7 @@ winremote-mcp --debug 2>&1 | tee winremote.log
 
 See our ready-to-use configurations:
 
+- **[GitHub Copilot Chat](https://github.com/dddabtc/winremote-mcp/tree/master/skill/copilot)**: VS Code Insiders workspace setup with auto-started harness
 - **[Claude Desktop](https://github.com/dddabtc/winremote-mcp/tree/master/skill/claude)**: Complete setup guide
 - **[OpenClaw](https://github.com/dddabtc/winremote-mcp/tree/master/skill/openclaw)**: Full skill package  
 - **[Cursor](https://github.com/dddabtc/winremote-mcp/tree/master/skill/cursor)**: `.cursor/mcp.json` config

@@ -152,7 +152,7 @@ pip install pywin32
 
 Once installed successfully:
 
-1. **Configure MCP Client**: See [Usage Guide](usage.md) for Claude Desktop, OpenClaw, or Cursor setup
+1. **Configure MCP Client**: See [Usage Guide](usage.md) for GitHub Copilot Chat, Claude Desktop, OpenClaw, or Cursor setup
 2. **Enable Remote Access**: Use `--host 0.0.0.0 --auth-key "your-key"` for network access
 3. **Auto-Start**: Run `winremote-mcp install` to start on boot
 

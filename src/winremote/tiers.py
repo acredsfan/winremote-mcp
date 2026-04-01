@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-VALID_PROFILES = {"default", "chatgpt"}
+VALID_PROFILES = {"default", "chatgpt", "copilot"}
 
 TOOL_TIERS = {
     "tier1": {
@@ -140,6 +140,13 @@ CHATGPT_PROFILE_TOOLS = {
     "RobloxStudioRunNamedTest",
     "ReconnectSession",
 }
+COPILOT_PROFILE_TOOLS = CHATGPT_PROFILE_TOOLS - {
+    "Shell",
+    "FileRead",
+    "FileWrite",
+    "FileList",
+    "FileSearch",
+}
 _NAME_LOOKUP = {name.lower(): name for name in ALL_TOOLS}
 
 
@@ -192,6 +199,8 @@ def resolve_enabled_tools(
         enabled = set(normalize_tool_names(explicit_tools))
     elif profile == "chatgpt":
         enabled = set(CHATGPT_PROFILE_TOOLS)
+    elif profile == "copilot":
+        enabled = set(COPILOT_PROFILE_TOOLS)
     elif enable_all:
         enabled = set(ALL_TOOLS)
     else:

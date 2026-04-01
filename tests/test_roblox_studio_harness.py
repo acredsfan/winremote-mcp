@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import urllib.request
+from unittest.mock import MagicMock
 
 from click.testing import CliRunner
 
@@ -102,3 +103,58 @@ class TestRobloxStudioHarnessStore:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_ensure_copilot_harness_running_starts_when_needed(self, monkeypatch):
+        import winremote.__main__ as mod
+
+        monkeypatch.setattr(
+            mod.roblox_studio,
+            "harness_request",
+            MagicMock(
+                side_effect=[
+                    {"ok": False, "error": "offline"},
+                    {"ok": False, "error": "still starting"},
+                    {"ok": True, "data": {"status": "ok"}},
+                ]
+            ),
+        )
+        launcher = MagicMock()
+        monkeypatch.setattr(mod, "_launch_harness_process", launcher)
+        monkeypatch.setattr(mod.time, "sleep", lambda _: None)
+
+        started = mod._ensure_copilot_harness_running()
+
+        assert started is True
+        launcher.assert_called_once()
+
+    def test_ensure_copilot_harness_running_noops_when_healthy(self, monkeypatch):
+        import winremote.__main__ as mod
+
+        monkeypatch.setattr(
+            mod.roblox_studio,
+            "harness_request",
+            MagicMock(return_value={"ok": True, "data": {"status": "ok"}}),
+        )
+        launcher = MagicMock()
+        monkeypatch.setattr(mod, "_launch_harness_process", launcher)
+
+        started = mod._ensure_copilot_harness_running()
+
+        assert started is False
+        launcher.assert_not_called()
+
+    def test_copilot_launch_uses_copilot_profile(self, monkeypatch):
+        import winremote.__main__ as mod
+
+        ensure = MagicMock(return_value=False)
+        run_server = MagicMock()
+        monkeypatch.setattr(mod, "_ensure_copilot_harness_running", ensure)
+        monkeypatch.setattr(mod, "_run_mcp_server", run_server)
+
+        result = CliRunner().invoke(cli, ["copilot-launch"])
+
+        assert result.exit_code == 0
+        ensure.assert_called_once()
+        run_server.assert_called_once()
+        assert run_server.call_args.kwargs["transport"] == "stdio"
+        assert run_server.call_args.kwargs["profile"] == "copilot"
