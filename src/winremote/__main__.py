@@ -63,6 +63,18 @@ COPILOT_SERVER_INSTRUCTIONS = (
     "as fallbacks for custom-drawn interfaces."
 )
 
+EXCEL_SERVER_INSTRUCTIONS = (
+    "Windows Remote MCP Server configured for Microsoft Excel automation. "
+    "Use FocusWindow or App to launch and focus Excel before interacting. "
+    "Prefer semantic GUI tools first: UIFind, UIAct, UISequence, UIMapJson, and ObserveScreen to inspect "
+    "ribbons, cells, dialogs, and the Name Box. Use OCR or UIFind to read cell values and formula bar content. "
+    "Use Type and Shortcut for entering formulas, applying formatting shortcuts, and navigating the grid. "
+    "Use SetClipboard and GetClipboard for bulk data transfers and pasting computed values. "
+    "Use Shell, FileRead, and FileWrite to run VBA macros via COM automation scripts, read CSV/XLSX data, "
+    "or write helper scripts. Use Snapshot or AnnotatedSnapshot only when visual confirmation is required. "
+    "Keep screenshots rare and low-resolution — prefer text-based inspection whenever possible."
+)
+
 mcp = FastMCP(
     "winremote-mcp",
     instructions=DEFAULT_SERVER_INSTRUCTIONS,
@@ -123,6 +135,8 @@ def _server_instructions_for_profile(profile: str) -> str:
         return CHATGPT_SERVER_INSTRUCTIONS
     if profile == "copilot":
         return COPILOT_SERVER_INSTRUCTIONS
+    if profile == "excel":
+        return EXCEL_SERVER_INSTRUCTIONS
     return DEFAULT_SERVER_INSTRUCTIONS
 
 
@@ -3717,7 +3731,7 @@ def _run_mcp_server(
 @click.option("--reload", is_flag=True, default=False, help="Enable hot reload (streamable-http only)")
 @click.option("--auth-key", default=None, envvar="WINREMOTE_AUTH_KEY", help="API key for authentication")
 @click.option("--config", default=None, help="Path to winremote.toml config file")
-@click.option("--profile", default="default", type=click.Choice(["default", "chatgpt", "copilot"]), help="Tool and instruction profile")
+@click.option("--profile", default="default", type=click.Choice(["default", "chatgpt", "copilot", "excel"]), help="Tool and instruction profile")
 @click.option(
     "--enable-all",
     is_flag=True,

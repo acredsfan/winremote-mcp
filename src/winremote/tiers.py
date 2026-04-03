@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-VALID_PROFILES = {"default", "chatgpt", "copilot"}
+VALID_PROFILES = {"default", "chatgpt", "copilot", "excel"}
 
 TOOL_TIERS = {
     "tier1": {
@@ -147,6 +147,54 @@ COPILOT_PROFILE_TOOLS = CHATGPT_PROFILE_TOOLS - {
     "FileList",
     "FileSearch",
 }
+EXCEL_PROFILE_TOOLS = {
+    # Observation
+    "ObserveScreen",
+    "Snapshot",
+    "AnnotatedSnapshot",
+    "UIMap",
+    "UIMapJson",
+    "UIFind",
+    "UIWatch",
+    "OCR",
+    # UI interaction
+    "Click",
+    "UIClick",
+    "UIAct",
+    "UISequence",
+    "Type",
+    "Move",
+    "Scroll",
+    "KeyDown",
+    "KeyUp",
+    "HoldKeys",
+    "Shortcut",
+    "FocusWindow",
+    "App",
+    # Clipboard (essential for Excel data workflows)
+    "GetClipboard",
+    "SetClipboard",
+    # File operations (reading/writing data files and running macros)
+    "Shell",
+    "FileRead",
+    "FileWrite",
+    "FileList",
+    "FileSearch",
+    # Waiting and assertions
+    "Wait",
+    "WaitForRegionText",
+    "WaitForImageChange",
+    "AssertWindowActive",
+    "AssertProcessRunning",
+    # System utilities
+    "GetSystemInfo",
+    "ListProcesses",
+    "Notification",
+    # Diagnostics
+    "TailFile",
+    "CaptureFailureBundle",
+    "ReconnectSession",
+}
 _NAME_LOOKUP = {name.lower(): name for name in ALL_TOOLS}
 
 
@@ -201,6 +249,8 @@ def resolve_enabled_tools(
         enabled = set(CHATGPT_PROFILE_TOOLS)
     elif profile == "copilot":
         enabled = set(COPILOT_PROFILE_TOOLS)
+    elif profile == "excel":
+        enabled = set(EXCEL_PROFILE_TOOLS)
     elif enable_all:
         enabled = set(ALL_TOOLS)
     else:

@@ -4,6 +4,11 @@
 		"command": "python",
 		"args": ["-m", "winremote", "--transport", "stdio"],
 		"env": {}
+		},
+		"winremote-excel": {
+		"command": "python",
+		"args": ["-m", "winremote", "--transport", "stdio", "--profile", "excel"],
+		"env": {}
 		}
 	}
 }
