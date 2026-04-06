@@ -33,9 +33,11 @@ dependencies = [
 
 [project.scripts]
 winremote-mcp = "winremote.__main__:cli"
+winremote-tray = "winremote.launcher_app:main"
 
 [project.optional-dependencies]
 ocr = ["pytesseract>=0.3.10"]
+gui = ["pystray>=0.19.0", "cryptography>=41.0.0"]
 dev = ["ruff>=0.9.0", "pytest>=8.0.0"]
 test = [
     "pytest>=8.0.0",

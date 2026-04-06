@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-VALID_PROFILES = {"default", "chatgpt", "copilot", "excel"}
+VALID_PROFILES = {"default", "chatgpt", "copilot", "excel", "claude"}
 
 TOOL_TIERS = {
     "tier1": {
@@ -147,6 +147,7 @@ COPILOT_PROFILE_TOOLS = CHATGPT_PROFILE_TOOLS - {
     "FileList",
     "FileSearch",
 }
+CLAUDE_PROFILE_TOOLS = set(CHATGPT_PROFILE_TOOLS)
 EXCEL_PROFILE_TOOLS = {
     # Observation
     "ObserveScreen",
@@ -249,6 +250,8 @@ def resolve_enabled_tools(
         enabled = set(CHATGPT_PROFILE_TOOLS)
     elif profile == "copilot":
         enabled = set(COPILOT_PROFILE_TOOLS)
+    elif profile == "claude":
+        enabled = set(CLAUDE_PROFILE_TOOLS)
     elif profile == "excel":
         enabled = set(EXCEL_PROFILE_TOOLS)
     elif enable_all:

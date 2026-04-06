@@ -27,6 +27,16 @@ pip install .
 
 ## Optional Dependencies
 
+### GUI Tray Launcher
+
+For the local Windows tray app (`winremote-tray`):
+
+```bash
+pip install winremote-mcp[gui]
+```
+
+This installs the GUI dependency (`pystray`) used by the launcher dashboard/tray controls.
+
 ### OCR Support
 
 For text extraction from screenshots:
@@ -60,6 +70,9 @@ Test your installation:
 # Check version
 winremote-mcp --version
 
+# Optional: verify tray launcher entrypoint is discoverable
+Get-Command winremote-tray
+
 # Start server (should show "Server running on...")
 winremote-mcp
 
@@ -68,6 +81,12 @@ curl http://localhost:8090/health
 ```
 
 Expected output: `{"status":"ok","version":"0.4.4"}`
+
+If `winremote-tray` is not found, either reopen PowerShell (to refresh PATH) or run it directly:
+
+```powershell
+& "$env:APPDATA\Python\Python312\Scripts\winremote-tray.exe"
+```
 
 ## Troubleshooting
 

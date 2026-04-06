@@ -21,6 +21,15 @@ pip install winremote-mcp
 winremote-mcp
 ```
 
+Prefer a GUI launcher instead of terminal commands?
+
+```bash
+pip install winremote-mcp[gui]
+winremote-tray
+```
+
+The tray app lets you start/stop/restart the server, switch profiles, control a local Cloudflare tunnel, and monitor status/history.
+
 That's it! Your Windows MCP server is now running on `http://127.0.0.1:8090` and ready to accept commands from MCP clients like Claude Desktop or OpenClaw.
 
 ## ChatGPT Full-MCP Profile

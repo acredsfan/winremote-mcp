@@ -101,7 +101,11 @@ def load_config(path: Path | None) -> WinRemoteConfig:
     if "ssl_keyfile" in server:
         cfg.server.ssl_keyfile = str(server["ssl_keyfile"]) or None
     if "profile" in server:
-        cfg.server.profile = _choice_string(server["profile"], "server.profile", allowed={"default", "chatgpt", "copilot"})
+        cfg.server.profile = _choice_string(
+            server["profile"],
+            "server.profile",
+            allowed={"default", "chatgpt", "copilot", "excel", "claude"},
+        )
 
     if "ip_allowlist" in security:
         cfg.security.ip_allowlist = _list_of_strings(security["ip_allowlist"], "security.ip_allowlist")

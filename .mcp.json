@@ -9,6 +9,11 @@
 		"command": "python",
 		"args": ["-m", "winremote", "--transport", "stdio", "--profile", "excel"],
 		"env": {}
+		},
+		"winremote-claude": {
+		"command": "python",
+		"args": ["-m", "winremote", "--transport", "stdio", "--profile", "claude"],
+		"env": {}
 		}
 	}
 }

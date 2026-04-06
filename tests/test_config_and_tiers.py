@@ -5,7 +5,13 @@ import pytest
 from winremote.config import discover_config_path, load_config
 from winremote.security import parse_ip_allowlist
 from winremote.taskmanager import TOOL_CATEGORIES, ToolCategory
-from winremote.tiers import CHATGPT_PROFILE_TOOLS, COPILOT_PROFILE_TOOLS, normalize_profile_name, resolve_enabled_tools
+from winremote.tiers import (
+    CHATGPT_PROFILE_TOOLS,
+    CLAUDE_PROFILE_TOOLS,
+    COPILOT_PROFILE_TOOLS,
+    normalize_profile_name,
+    resolve_enabled_tools,
+)
 
 
 def test_config_loader_reads_toml(tmp_path: Path):
@@ -114,6 +120,36 @@ def test_copilot_profile_exclude_tools():
     assert "Notification" not in enabled
     assert "GetClipboard" not in enabled
     assert "UIAct" in enabled
+
+
+def test_claude_profile_resolution_mirrors_chatgpt():
+    enabled = resolve_enabled_tools(profile="claude")
+    assert enabled == CLAUDE_PROFILE_TOOLS
+    assert enabled == CHATGPT_PROFILE_TOOLS
+    assert "Shell" in enabled
+    assert "FileWrite" in enabled
+    assert "UIAct" in enabled
+
+
+def test_claude_profile_exclude_tools():
+    enabled = resolve_enabled_tools(profile="claude", exclude_tools=["Shell", "FileWrite"])
+    assert "Shell" not in enabled
+    assert "FileWrite" not in enabled
+    assert "UIAct" in enabled
+
+
+def test_config_loader_accepts_claude_profile(tmp_path: Path):
+    cfg_file = tmp_path / "winremote.toml"
+    cfg_file.write_text(
+        """
+[server]
+profile = "claude"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(cfg_file)
+    assert cfg.server.profile == "claude"
 
 
 def test_invalid_profile_rejected():

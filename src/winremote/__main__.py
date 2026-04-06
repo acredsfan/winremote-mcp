@@ -53,6 +53,14 @@ CHATGPT_SERVER_INSTRUCTIONS = (
     "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough."
 )
 
+CLAUDE_SERVER_INSTRUCTIONS = (
+    "Windows Remote MCP Server for Claude Desktop and Claude Code workflows. Prefer semantic GUI "
+    "tools first: ObserveScreen, UIFind, UIAct, UISequence, UIWatch, UIMap, and "
+    "AnnotatedSnapshot. Use Snapshot only when pixels are actually required. FocusWindow "
+    "or App should target the app before interaction. Use Click, Type, Move, Scroll, and "
+    "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough."
+)
+
 COPILOT_SERVER_INSTRUCTIONS = (
     "Windows Remote MCP Server for GitHub Copilot Chat workflows inside VS Code Insiders. "
     "Copilot already has strong workspace editing and terminal tools, so prefer those for repo changes. "
@@ -133,6 +141,8 @@ def _server_instructions_for_profile(profile: str) -> str:
     """Return profile-specific server instructions."""
     if profile == "chatgpt":
         return CHATGPT_SERVER_INSTRUCTIONS
+    if profile == "claude":
+        return CLAUDE_SERVER_INSTRUCTIONS
     if profile == "copilot":
         return COPILOT_SERVER_INSTRUCTIONS
     if profile == "excel":
@@ -3731,7 +3741,12 @@ def _run_mcp_server(
 @click.option("--reload", is_flag=True, default=False, help="Enable hot reload (streamable-http only)")
 @click.option("--auth-key", default=None, envvar="WINREMOTE_AUTH_KEY", help="API key for authentication")
 @click.option("--config", default=None, help="Path to winremote.toml config file")
-@click.option("--profile", default="default", type=click.Choice(["default", "chatgpt", "copilot", "excel"]), help="Tool and instruction profile")
+@click.option(
+    "--profile",
+    default="default",
+    type=click.Choice(["default", "chatgpt", "copilot", "excel", "claude"]),
+    help="Tool and instruction profile",
+)
 @click.option(
     "--enable-all",
     is_flag=True,

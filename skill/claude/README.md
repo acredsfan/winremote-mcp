@@ -18,7 +18,7 @@ Edit `claude_desktop_config.json`:
   "mcpServers": {
     "winremote": {
       "command": "python",
-      "args": ["-m", "winremote", "--transport", "stdio"]
+      "args": ["-m", "winremote", "--transport", "stdio", "--profile", "claude"]
     }
   }
 }
@@ -55,7 +55,7 @@ Add to your Claude Code MCP settings:
   "mcpServers": {
     "winremote": {
       "command": "python",
-      "args": ["-m", "winremote", "--transport", "stdio"]
+      "args": ["-m", "winremote", "--transport", "stdio", "--profile", "claude"]
     }
   }
 }
@@ -84,7 +84,7 @@ Or for remote:
 
 ## What Claude Can Do
 
-With winremote-mcp, Claude gets 40 tools to control your Windows machine:
+With winremote-mcp and `--profile claude`, Claude gets the same full toolset as the `chatgpt` profile to control your Windows machine:
 
 - **See your screen** — `Snapshot`, `AnnotatedSnapshot`, `OCR`
 - **Click and type** — `Click`, `Type`, `Shortcut`, `FocusWindow`

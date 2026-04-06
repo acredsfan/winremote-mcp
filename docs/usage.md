@@ -15,6 +15,50 @@ winremote-mcp --port 8091
 winremote-mcp --reload
 ```
 
+### GUI Launcher (System Tray)
+
+You can run WinRemote with a local GUI tray app instead of launching from a terminal.
+
+```bash
+# Install GUI extras (once)
+pip install winremote-mcp[gui]
+
+# Start tray launcher
+winremote-tray
+```
+
+The tray launcher provides:
+
+- **Server lifecycle**: Start / Stop / Restart
+- **Profile control**: Switch between `default`, `chatgpt`, `copilot`, `claude`, and `excel`
+- **Cloudflare tunnel control**: Start/stop local `cloudflared`, with URL/status visibility
+- **Monitoring**: Live status + persisted local event history
+- **Settings UI**: Configure host/port/auth/SSL/profile and tunnel paths without editing CLI args
+
+#### Non-admin behavior
+
+The GUI is designed to run for standard-user accounts (no elevation required):
+
+- Uses per-user settings at `%APPDATA%\winremote\launcher_settings.toml`
+- Uses per-user history at `%APPDATA%\winremote\launcher_history.jsonl`
+- In non-admin safe mode, tier3 tools are disabled automatically
+- Privileged ports (`<1024`) are automatically corrected to `8090`
+
+You can see your current privilege mode in the tray menu (`Mode: Admin` or `Mode: Standard User`).
+
+If PowerShell says `winremote-tray` is not recognized, install/update with GUI extras and reopen the terminal:
+
+```powershell
+python -m pip install -e ".[gui]"
+Get-Command winremote-tray
+```
+
+Direct fallback (works even when PATH is stale):
+
+```powershell
+python -m winremote.launcher_app
+```
+
 ### Remote Access
 
 ```bash
