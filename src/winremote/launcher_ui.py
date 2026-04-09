@@ -518,6 +518,7 @@ class DashboardWindow:
 
     def show(self) -> None:
         if self._win and self._win.winfo_exists():
+            self._win.deiconify()
             self._win.lift()
             self._win.focus_force()
             return
@@ -1029,6 +1030,7 @@ class LogWindow:
 
     def show(self) -> None:
         if self._win and self._win.winfo_exists():
+            self._win.deiconify()
             self._win.lift()
             self._win.focus_force()
             return
