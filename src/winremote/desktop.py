@@ -417,6 +417,12 @@ def invalidate_ui_map_cache(window_title: str = "") -> int:
     if not window_title:
         cleared = len(_UI_MAP_CACHE)
         _UI_MAP_CACHE.clear()
+        try:
+            from winremote import roblox_studio
+
+            roblox_studio.invalidate_studio_inspection_cache()
+        except Exception:
+            pass
         return cleared
 
     normalized = window_title.strip().lower()
@@ -424,6 +430,12 @@ def invalidate_ui_map_cache(window_title: str = "") -> int:
     keys_to_remove = [key for key in list(_UI_MAP_CACHE) if key.split("|", 1)[0] in aliases]
     for key in keys_to_remove:
         _UI_MAP_CACHE.pop(key, None)
+    try:
+        from winremote import roblox_studio
+
+        roblox_studio.invalidate_studio_inspection_cache(window_title)
+    except Exception:
+        pass
     return len(keys_to_remove)
 
 
@@ -720,6 +732,34 @@ def summarize_ui_map(mapped: list[dict], preview_limit: int = 12) -> dict:
     }
 
 
+def _is_low_observability_ui(summary: dict[str, Any] | None) -> bool:
+    """Return whether a UI summary suggests a custom-rendered window."""
+    if not summary:
+        return False
+
+    control_count = int(summary.get("control_count", 0) or 0)
+    class_counts = summary.get("class_counts") or {}
+    notes = summary.get("notes") or []
+    text_observability = summary.get("text_observability") or {}
+    custom_rendered_classes = {
+        "Chrome Legacy Window",
+        "Intermediate D3D Window",
+        "Windows.UI.Composition.DesktopWindowContentBridge",
+    }
+
+    custom_rendered_controls = sum(int(class_counts.get(class_name, 0) or 0) for class_name in custom_rendered_classes)
+    visible_text_controls = int(text_observability.get("window_text_controls", 0) or 0) + int(
+        text_observability.get("ocr_text_controls", 0) or 0
+    )
+
+    return (
+        control_count <= 2
+        or bool(notes)
+        or (control_count > 0 and custom_rendered_controls >= control_count)
+        or (control_count > 0 and visible_text_controls == 0)
+    )
+
+
 def _build_search_diagnostics(mapped: list[dict], query: str, matches: list[dict], preview_limit: int = 12) -> dict:
     """Build search diagnostics and next-step hints for UIFind/UIClick."""
     candidates = mapped if mapped else []
@@ -885,6 +925,53 @@ def find_ui_elements_with_context(
     matches.sort(key=lambda item: (-item["match"]["score"], item.get("index", 0)))
     limited_matches = matches[:max_results]
     diagnostics = _build_search_diagnostics(mapped, query, limited_matches)
+
+    if not limited_matches and mapped:
+        try:
+            from winremote import roblox_studio
+        except Exception:
+            roblox_studio = None
+
+        window = mapped[0]
+        summary = diagnostics.get("summary")
+        should_try_studio_fallback = bool(
+            roblox_studio
+            and roblox_studio.is_studio_window(window)
+            and _is_low_observability_ui(summary)
+        )
+
+        if should_try_studio_fallback and roblox_studio is not None:
+            fallback_result = roblox_studio.inspect_studio_ui_regions(
+                window,
+                query=query,
+                max_results=max_results,
+                use_cache=use_cache,
+            )
+            fallback_matches = fallback_result.get("matches") or []
+            fallback_preview = fallback_result.get("searchable_preview") or []
+            fallback_notes = fallback_result.get("notes") or []
+
+            if fallback_matches:
+                limited_matches = fallback_matches[:max_results]
+
+            if fallback_matches or fallback_preview:
+                updated_summary = dict(summary or {})
+                updated_summary["inspection_mode"] = fallback_result.get("inspection_mode") or "roblox_ocr_fallback"
+                updated_summary["fallback_region_count"] = len(fallback_result.get("regions") or [])
+                diagnostics["summary"] = updated_summary
+                diagnostics["searched_element_count"] = int(diagnostics.get("searched_element_count", 0) or 0) + int(
+                    fallback_result.get("searched_region_count", 0) or 0
+                )
+                if fallback_preview:
+                    diagnostics["searchable_preview"] = fallback_preview[:12]
+
+            filtered_recommendations = [
+                item
+                for item in diagnostics.get("recommendations", [])
+                if not str(item).startswith("No exact UI match was found")
+            ]
+            diagnostics["recommendations"] = list(dict.fromkeys([*fallback_notes, *filtered_recommendations]))
+
     return {
         "window": mapped[0] if mapped else None,
         "mapped": mapped,

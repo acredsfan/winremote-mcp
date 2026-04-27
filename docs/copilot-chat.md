@@ -68,6 +68,7 @@ With that in place, opening the workspace in VS Code Insiders is enough for Copi
 The `copilot` profile keeps tools that match a human developer workflow:
 
 - `ObserveScreen`, `UIFind`, `UIWatch`, `UIAct`, `UISequence`
+- `RobloxStudioInspectUI`, `RobloxStudioOpenTab`, `RobloxStudioEnsurePanel`
 - `Snapshot`, `AnnotatedSnapshot`, `UIMap`, `UIMapJson`, `UIClick`, `OCR`
 - `Click`, `Type`, `Move`, `Scroll`, `Shortcut`, `Wait`
 - `FocusWindow`, `App`, `ReconnectSession`
@@ -83,10 +84,12 @@ For Roblox Studio work, the ideal loop is:
 
 1. Let Copilot edit the workspace with its built-in file and terminal tools.
 2. Use `App` or `FocusWindow` to target Roblox Studio.
-3. Use `ObserveScreen`, `UIFind`, `UIAct`, or `UISequence` for low-bandwidth GUI work.
-4. Use `RobloxStudioRunPlaytest` to launch Play Solo.
-5. Use `RobloxStudioGetTestState`, `RobloxStudioRunNamedTest`, `RobloxStudioResetCharacter`, or `RobloxStudioTeleportToCheckpoint` for harness-backed operations.
-6. Fall back to screenshots and raw input only when semantic tools are not enough.
+3. Use `RobloxStudioInspectUI`, `RobloxStudioOpenTab`, and `RobloxStudioEnsurePanel` first for Studio editor layout and navigation.
+4. Use `ObserveScreen`, `UIFind`, `UIAct`, or `UISequence` for detailed low-bandwidth GUI work.
+   - When Studio exposes mostly custom-rendered surfaces, `UIFind`, `UIAct`, and `UISequence` automatically retry with a Studio-aware OCR fallback over ribbon tabs and major dock regions (`Toolbox`, `Explorer`, `Properties`, `Output`) before escalating to screenshots.
+5. Use `RobloxStudioRunPlaytest` to launch Play Solo.
+6. Use `RobloxStudioGetTestState`, `RobloxStudioRunNamedTest`, `RobloxStudioResetCharacter`, or `RobloxStudioTeleportToCheckpoint` for harness-backed operations.
+7. Fall back to screenshots and raw input only when semantic tools are not enough.
 
 ## Example Prompts
 

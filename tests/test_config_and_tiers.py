@@ -92,6 +92,8 @@ def test_chatgpt_profile_resolution():
     assert "Click" in enabled
     assert "Type" in enabled
     assert "UIMap" in enabled
+    assert "RobloxStudioInspectUI" in enabled
+    assert "RobloxStudioEnsurePanel" in enabled
     assert "RobloxStudioRunPlaytest" in enabled
     assert "WaitForImageChange" in enabled
     assert "TaskCreate" not in enabled
@@ -109,6 +111,8 @@ def test_copilot_profile_resolution():
     assert enabled == COPILOT_PROFILE_TOOLS
     assert "UIAct" in enabled
     assert "App" in enabled
+    assert "RobloxStudioInspectUI" in enabled
+    assert "RobloxStudioOpenTab" in enabled
     assert "RobloxStudioRunPlaytest" in enabled
     assert "RobloxStudioRunNamedTest" in enabled
     assert "Shell" not in enabled
@@ -176,3 +180,6 @@ def test_new_ui_tools_are_desktop_category():
     assert TOOL_CATEGORIES["ObserveScreen"] == ToolCategory.DESKTOP
     assert TOOL_CATEGORIES["UIAct"] == ToolCategory.DESKTOP
     assert TOOL_CATEGORIES["UISequence"] == ToolCategory.DESKTOP
+    assert TOOL_CATEGORIES["RobloxStudioInspectUI"] == ToolCategory.DESKTOP
+    assert TOOL_CATEGORIES["RobloxStudioOpenTab"] == ToolCategory.DESKTOP
+    assert TOOL_CATEGORIES["RobloxStudioEnsurePanel"] == ToolCategory.DESKTOP

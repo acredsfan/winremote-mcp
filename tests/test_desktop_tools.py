@@ -451,6 +451,108 @@ class TestDesktopFindUIElementsWithContext:
         assert result["summary"]["control_count"] == 1
 
 
+class TestDesktopRobloxStudioFallback:
+    def test_find_ui_elements_with_context_uses_roblox_ocr_fallback_when_win32_is_low_observability(self):
+        mapped = [
+            {
+                "index": 0,
+                "type": "window",
+                "label": "Roblox Studio",
+                "window_text": "Roblox Studio",
+                "class": "Window",
+                "monitor_id": 1,
+                "process_name": "RobloxStudioBeta.exe",
+                "center": {"x": 500, "y": 350},
+                "relative_center": {"x": 500, "y": 350},
+                "rect": {"left": 0, "top": 0, "right": 1000, "bottom": 700},
+                "element_id": "window-1",
+            },
+            {
+                "index": 1,
+                "type": "control",
+                "label": "DesktopWindowXamlSource",
+                "window_text": "DesktopWindowXamlSource",
+                "class": "Windows.UI.Composition.DesktopWindowContentBridge",
+                "monitor_id": 1,
+                "center": {"x": 500, "y": 350},
+                "relative_center": {"x": 500, "y": 350},
+                "rect": {"left": 0, "top": 0, "right": 1000, "bottom": 700},
+                "element_id": "control-1",
+            },
+        ]
+        fallback_match = {
+            "index": 2000,
+            "type": "control",
+            "label": "Inventory",
+            "class": "RobloxStudioOCRRegion",
+            "source": "roblox_ocr_fallback",
+            "monitor_id": 1,
+            "center": {"x": 160, "y": 250},
+            "relative_center": {"x": 160, "y": 250},
+            "rect": {"left": 40, "top": 120, "right": 280, "bottom": 380},
+            "element_id": "ocr-1",
+            "match": {"score": 94, "type": "contains", "field": "ocr_text", "value": "Inventory Models", "confidence": "high", "reason": "contains on ocr_text"},
+        }
+
+        with patch("winremote.desktop.map_ui_elements", return_value=mapped), patch(
+            "winremote.roblox_studio.inspect_studio_ui_regions",
+            return_value={
+                "inspection_mode": "roblox_ocr_fallback",
+                "regions": [fallback_match],
+                "matches": [fallback_match],
+                "searchable_preview": [{"index": 2000, "label": "Inventory", "class": "RobloxStudioOCRRegion"}],
+                "notes": ["Roblox Studio OCR fallback was used because Win32 exposed too little semantic UI."],
+                "searched_region_count": 4,
+            },
+        ):
+            result = desktop.find_ui_elements_with_context(query="Inventory", window_title="Roblox Studio")
+
+        assert result["matches"]
+        assert result["matches"][0]["label"] == "Inventory"
+        assert result["matches"][0]["source"] == "roblox_ocr_fallback"
+        assert result["summary"]["inspection_mode"] == "roblox_ocr_fallback"
+        assert any("OCR fallback" in item for item in result["recommendations"])
+
+    def test_find_ui_elements_with_context_does_not_use_roblox_ocr_fallback_when_win32_already_matches(self):
+        mapped = [
+            {
+                "index": 0,
+                "type": "window",
+                "label": "Roblox Studio",
+                "window_text": "Roblox Studio",
+                "class": "Window",
+                "monitor_id": 1,
+                "process_name": "RobloxStudioBeta.exe",
+                "center": {"x": 500, "y": 350},
+                "relative_center": {"x": 500, "y": 350},
+                "rect": {"left": 0, "top": 0, "right": 1000, "bottom": 700},
+                "element_id": "window-1",
+            },
+            {
+                "index": 1,
+                "type": "control",
+                "label": "Inventory",
+                "window_text": "Inventory",
+                "class": "Button",
+                "monitor_id": 1,
+                "center": {"x": 160, "y": 250},
+                "relative_center": {"x": 160, "y": 250},
+                "rect": {"left": 40, "top": 120, "right": 280, "bottom": 380},
+                "element_id": "control-1",
+            },
+        ]
+
+        with patch("winremote.desktop.map_ui_elements", return_value=mapped), patch(
+            "winremote.roblox_studio.inspect_studio_ui_regions"
+        ) as mock_fallback:
+            result = desktop.find_ui_elements_with_context(query="Inventory", window_title="Roblox Studio")
+
+        assert result["matches"]
+        assert result["matches"][0]["class"] == "Button"
+        mock_fallback.assert_not_called()
+        assert result["summary"].get("inspection_mode") != "roblox_ocr_fallback"
+
+
 class TestUIWatch:
     def test_baseline_created(self):
         with patch("winremote.__main__.desktop") as mock_desktop:
@@ -741,6 +843,46 @@ class TestUIAct:
             assert payload["status"] == "completed"
             assert payload["wait_condition"]["satisfied"] is True
             assert payload["wait_condition"]["target"]["label"] == "Save Complete"
+
+    def test_clicks_roblox_ocr_fallback_match(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop.HAS_WIN32 = True
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.find_ui_elements_with_context.return_value = {
+                "window": {"label": "Roblox Studio"},
+                "matches": [
+                    {
+                        "label": "Inventory",
+                        "class": "RobloxStudioOCRRegion",
+                        "source": "roblox_ocr_fallback",
+                        "element_id": "ocr1",
+                        "monitor_id": 1,
+                        "center": {"x": 100, "y": 180},
+                        "relative_center": {"x": 50, "y": 80},
+                        "rect": {"left": 60, "top": 160, "right": 140, "bottom": 200},
+                        "match": {"score": 94, "type": "contains", "field": "ocr_text", "value": "Inventory Models"},
+                    }
+                ],
+                "searched_element_count": 2,
+                "searchable_preview": [{"label": "Inventory"}],
+                "summary": {"control_count": 1, "inspection_mode": "roblox_ocr_fallback", "notes": []},
+                "recommendations": [],
+            }
+            mock_desktop.validate_screen_point.return_value = {"monitor_id": 1}
+            mock_desktop.focus_window.return_value = "Focused window"
+            mock_desktop.observe_screen.side_effect = [
+                {"baseline_created": True, "changed": None, "changed_regions": []},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+                {"baseline_created": False, "changed": True, "changed_regions": [{"left": 0, "top": 0, "right": 50, "bottom": 50}]},
+            ]
+
+            result = _call_tool("UIAct", query="Inventory")
+
+            payload = _parse_task_wrapped_json(result)
+            pyautogui.moveTo.assert_called_with(100, 180)
+            pyautogui.click.assert_called_with(100, 180, button="left")
+            assert payload["status"] == "completed"
+            assert payload["target"]["label"] == "Inventory"
 
 
 class TestUISequence:

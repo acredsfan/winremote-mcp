@@ -50,7 +50,11 @@ CHATGPT_SERVER_INSTRUCTIONS = (
     "tools first: ObserveScreen, UIFind, UIAct, UISequence, UIWatch, UIMap, and "
     "AnnotatedSnapshot. Use Snapshot only when pixels are actually required. FocusWindow "
     "or App should target the app before interaction. Use Click, Type, Move, Scroll, and "
-    "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough."
+    "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough. "
+    "For Roblox Studio, prefer RobloxStudioInspectUI, RobloxStudioOpenTab, and RobloxStudioEnsurePanel "
+    "for editor layout and navigation, then use UIFind, UIAct, and UISequence for detailed interactions. "
+    "Those semantic tools automatically retry with a Studio-aware OCR fallback over ribbon tabs and dock regions "
+    "before resorting to screenshots."
 )
 
 CLAUDE_SERVER_INSTRUCTIONS = (
@@ -58,7 +62,11 @@ CLAUDE_SERVER_INSTRUCTIONS = (
     "tools first: ObserveScreen, UIFind, UIAct, UISequence, UIWatch, UIMap, and "
     "AnnotatedSnapshot. Use Snapshot only when pixels are actually required. FocusWindow "
     "or App should target the app before interaction. Use Click, Type, Move, Scroll, and "
-    "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough."
+    "Shortcut as fallbacks for custom-drawn interfaces when the semantic path is not enough. "
+    "For Roblox Studio, prefer RobloxStudioInspectUI, RobloxStudioOpenTab, and RobloxStudioEnsurePanel "
+    "for editor layout and navigation, then use UIFind, UIAct, and UISequence for detailed interactions. "
+    "Those semantic tools automatically retry with a Studio-aware OCR fallback over ribbon tabs and dock regions "
+    "before resorting to screenshots."
 )
 
 COPILOT_SERVER_INSTRUCTIONS = (
@@ -67,8 +75,11 @@ COPILOT_SERVER_INSTRUCTIONS = (
     "Use this MCP server for desktop interaction like a human developer: focusing windows, launching apps, "
     "driving custom GUIs, operating Roblox Studio, running playtests, and querying the Roblox Studio harness. "
     "Prefer semantic GUI tools first: ObserveScreen, UIFind, UIAct, UISequence, UIWatch, and UIMap. "
+    "For Roblox Studio editor work, use RobloxStudioInspectUI, RobloxStudioOpenTab, and RobloxStudioEnsurePanel "
+    "before lower-level clicks. "
     "Use Snapshot only when pixels are actually required, and use Click, Type, Move, Scroll, and Shortcut "
-    "as fallbacks for custom-drawn interfaces."
+    "as fallbacks for custom-drawn interfaces. UIFind, UIAct, and UISequence automatically retry with a "
+    "Studio-aware OCR fallback over ribbon tabs and dock regions before resorting to screenshots."
 )
 
 EXCEL_SERVER_INSTRUCTIONS = (
@@ -432,6 +443,146 @@ def _studio_focus() -> str:
 def _studio_harness_payload(route: str, *, payload: dict[str, Any] | None = None, harness_url: str = "", timeout: float = 10.0) -> dict[str, Any]:
     """Call the local Roblox Studio harness and return its payload."""
     return roblox_studio.harness_request("POST", route, payload=payload, harness_url=harness_url, timeout=timeout)
+
+
+def _studio_window_payload() -> dict[str, Any]:
+    """Return the current Roblox Studio window as a JSON-friendly payload."""
+    studio_window = _find_window_by_title_fragment("Roblox Studio")
+    if studio_window is None:
+        raise RuntimeError("Roblox Studio window not found")
+    return {
+        "handle": studio_window.handle,
+        "label": studio_window.title,
+        "title": studio_window.title,
+        "rect": {
+            "left": studio_window.rect[0],
+            "top": studio_window.rect[1],
+            "right": studio_window.rect[2],
+            "bottom": studio_window.rect[3],
+        },
+        "size": {"width": studio_window.width, "height": studio_window.height},
+        "pid": studio_window.pid,
+        "process_name": studio_window.process_name,
+        "monitor_id": studio_window.monitor_id,
+    }
+
+
+def _compact_studio_candidate(candidate: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a compact Roblox Studio editor target payload."""
+    if not candidate:
+        return None
+    payload = {
+        "label": candidate.get("label"),
+        "class": candidate.get("class"),
+        "source": candidate.get("source"),
+        "region_id": candidate.get("region_id"),
+        "element_id": candidate.get("element_id"),
+        "monitor_id": candidate.get("monitor_id", 0),
+        "center": candidate.get("center"),
+        "relative_center": candidate.get("relative_center"),
+        "rect": candidate.get("rect"),
+        "ocr_text": str(candidate.get("ocr_text") or "")[:160] or None,
+        "match": candidate.get("match"),
+    }
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _compact_studio_inspection(inspection: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a compact Studio inspection summary."""
+    if inspection is None:
+        return None
+    return {
+        "inspection_mode": inspection.get("inspection_mode"),
+        "window_title": inspection.get("window_title"),
+        "tabs": [_compact_studio_candidate(item) for item in (inspection.get("tabs") or [])[:5]],
+        "panels": [_compact_studio_candidate(item) for item in (inspection.get("panels") or [])[:5]],
+        "ribbon_regions": [_compact_studio_candidate(item) for item in (inspection.get("ribbon_regions") or [])[:6]],
+        "matches": [_compact_studio_candidate(item) for item in (inspection.get("matches") or [])[:5]],
+        "searchable_preview": (inspection.get("searchable_preview") or [])[:8],
+        "notes": _trim_recommendations(inspection.get("notes"), limit=4),
+    }
+
+
+def _studio_click_target(target: dict[str, Any], *, button: str = "left") -> None:
+    """Move to and click a Studio UI target candidate."""
+    center = target.get("center") or {}
+    x = int(center.get("x", 0) or 0)
+    y = int(center.get("y", 0) or 0)
+    desktop.validate_screen_point(x, y)
+    pyautogui.moveTo(x, y)
+    pyautogui.click(x, y, button=button)
+
+
+def _studio_open_tab_action(
+    tab_name: str,
+    *,
+    focus_window: bool = True,
+    timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    """Open a top-level Roblox Studio ribbon tab and return a structured result."""
+    canonical_tab = roblox_studio.normalize_studio_tab_name(tab_name)
+    focus_result = _studio_focus() if focus_window else None
+    desktop.invalidate_ui_map_cache("Roblox Studio")
+    window_before = _studio_window_payload()
+    inspection_before = roblox_studio.inspect_studio_ui_regions(
+        window_before,
+        query=canonical_tab,
+        max_results=6,
+        use_cache=False,
+    )
+    tab_matches = [
+        item
+        for item in (inspection_before.get("matches") or [])
+        if str(item.get("class") or "") == "RobloxStudioHeuristicRegion" and str(item.get("region_id") or "").endswith("_tab")
+    ]
+    if not tab_matches:
+        tab_matches = [item for item in (inspection_before.get("tabs") or []) if roblox_studio.normalize_studio_tab_name(item.get("label") or "") == canonical_tab]
+
+    if not tab_matches:
+        return {
+            "status": "no-match",
+            "tab_name": canonical_tab,
+            "focus_result": focus_result,
+            "window": window_before,
+            "inspection_before": _compact_studio_inspection(inspection_before),
+            "recommendations": [
+                f"Could not locate the {canonical_tab} tab in Roblox Studio. Use RobloxStudioInspectUI for a fresh editor snapshot.",
+            ],
+        }
+
+    target = tab_matches[0]
+    pre_observation = desktop.observe_screen(window_title="Roblox Studio", reset=True, update_baseline=True)
+    _studio_click_target(target)
+    desktop.invalidate_ui_map_cache("Roblox Studio")
+    post_wait = _wait_for_image_change(
+        window_title="Roblox Studio",
+        timeout_seconds=max(0.5, float(timeout_seconds)),
+        poll_interval=0.2,
+        min_change_ratio=0.005,
+        reset_baseline=False,
+    )
+    desktop.invalidate_ui_map_cache("Roblox Studio")
+    window_after = _studio_window_payload()
+    inspection_after = roblox_studio.inspect_studio_ui_regions(
+        window_after,
+        include_ribbon=True,
+        use_cache=False,
+    )
+    return {
+        "status": "completed",
+        "tab_name": canonical_tab,
+        "focus_result": focus_result,
+        "window": window_after,
+        "target": _compact_studio_candidate(target),
+        "observation_before": _compact_observation_payload(pre_observation),
+        "observation_after": _compact_observation_payload(post_wait.get("observation")),
+        "changed": post_wait.get("satisfied"),
+        "inspection_before": _compact_studio_inspection(inspection_before),
+        "inspection_after": _compact_studio_inspection(inspection_after),
+        "recommendations": [
+            f"Opened the {canonical_tab} tab. Reuse inspection_after.ribbon_regions or general semantic tools before asking the user to locate controls manually.",
+        ],
+    }
 
 
 def _ensure_session_connected() -> str | None:
@@ -1344,6 +1495,217 @@ def RobloxStudioRunNamedTest(
         return json.dumps(result, indent=2)
     except Exception as e:
         return f"RobloxStudioRunNamedTest error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioInspectUI",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioInspectUI(
+    query: str = "",
+    include_ribbon: bool | str = False,
+    focus_window: bool | str = True,
+    refresh: bool | str = False,
+    max_results: int = 8,
+) -> str:
+    """Inspect Roblox Studio editor chrome in a structured, low-token format.
+
+    Returns likely tab, panel, and optional ribbon-command regions so agents can
+    reason about the Studio layout without escalating immediately to screenshots.
+    """
+    try:
+        focus_result = _studio_focus() if _tobool(focus_window) else None
+        if _tobool(refresh):
+            desktop.invalidate_ui_map_cache("Roblox Studio")
+        window = _studio_window_payload()
+        inspection = roblox_studio.inspect_studio_ui_regions(
+            window,
+            query=query.strip(),
+            max_results=max_results,
+            use_cache=not _tobool(refresh),
+            include_ribbon=_tobool(include_ribbon),
+        )
+        payload = {
+            "status": "completed",
+            "query": query or None,
+            "include_ribbon": _tobool(include_ribbon),
+            "focus_result": focus_result,
+            "window": window,
+            "inspection_mode": inspection.get("inspection_mode"),
+            "tabs": [_compact_studio_candidate(item) for item in (inspection.get("tabs") or [])],
+            "panels": [_compact_studio_candidate(item) for item in (inspection.get("panels") or [])],
+            "ribbon_regions": [_compact_studio_candidate(item) for item in (inspection.get("ribbon_regions") or [])],
+            "matches": [_compact_studio_candidate(item) for item in (inspection.get("matches") or [])],
+            "searchable_preview": inspection.get("searchable_preview") or [],
+            "recommendations": _trim_recommendations(inspection.get("notes"), limit=5),
+            "coordinate_spaces": _ui_coordinate_spaces(),
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioInspectUI error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioOpenTab",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioOpenTab(tab_name: str, focus_window: bool | str = True, timeout_seconds: float = 2.0) -> str:
+    """Open a Roblox Studio ribbon tab such as Home, Model, Test, View, or Plugins."""
+    try:
+        payload = _studio_open_tab_action(
+            tab_name,
+            focus_window=_tobool(focus_window),
+            timeout_seconds=timeout_seconds,
+        )
+        payload["coordinate_spaces"] = _ui_coordinate_spaces()
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioOpenTab error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RobloxStudioEnsurePanel",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def RobloxStudioEnsurePanel(panel_name: str, focus_window: bool | str = True, timeout_seconds: float = 2.0) -> str:
+    """Ensure a common Roblox Studio editor panel is visible and return its likely bounds.
+
+    Supported panels: Toolbox, Explorer, Properties, Output.
+    """
+    try:
+        canonical_panel = roblox_studio.normalize_studio_panel_name(panel_name)
+        focus_result = _studio_focus() if _tobool(focus_window) else None
+        desktop.invalidate_ui_map_cache("Roblox Studio")
+        window_before = _studio_window_payload()
+        inspection_before = roblox_studio.inspect_studio_ui_regions(
+            window_before,
+            query=canonical_panel,
+            use_cache=False,
+        )
+        visible_matches = [
+            item for item in (inspection_before.get("matches") or []) if str(item.get("class") or "") == "RobloxStudioOCRRegion"
+        ]
+        if visible_matches:
+            target = visible_matches[0]
+            _studio_click_target(target)
+            payload = {
+                "status": "already-visible",
+                "panel_name": canonical_panel,
+                "focus_result": focus_result,
+                "window": window_before,
+                "target": _compact_studio_candidate(target),
+                "inspection_before": _compact_studio_inspection(inspection_before),
+                "satisfied": True,
+                "recommendations": [
+                    f"{canonical_panel} already looked visible, so the tool focused its dock region instead of toggling more UI.",
+                ],
+                "coordinate_spaces": _ui_coordinate_spaces(),
+            }
+            return json.dumps(payload, indent=2)
+
+        view_tab = _studio_open_tab_action("View", focus_window=False, timeout_seconds=max(0.5, timeout_seconds))
+        if view_tab.get("status") != "completed":
+            payload = {
+                "status": "no-match",
+                "panel_name": canonical_panel,
+                "focus_result": focus_result,
+                "window": window_before,
+                "inspection_before": _compact_studio_inspection(inspection_before),
+                "view_tab": view_tab,
+                "satisfied": False,
+                "recommendations": [
+                    f"Could not activate the View tab, so {canonical_panel} could not be ensured automatically.",
+                ],
+                "coordinate_spaces": _ui_coordinate_spaces(),
+            }
+            return json.dumps(payload, indent=2)
+
+        desktop.invalidate_ui_map_cache("Roblox Studio")
+        window_ribbon = _studio_window_payload()
+        ribbon_inspection = roblox_studio.inspect_studio_ui_regions(
+            window_ribbon,
+            query=canonical_panel,
+            include_ribbon=True,
+            use_cache=False,
+        )
+        ribbon_matches = [
+            item for item in (ribbon_inspection.get("matches") or []) if str(item.get("class") or "") == "RobloxStudioRibbonOCRRegion"
+        ]
+        if not ribbon_matches:
+            payload = {
+                "status": "no-match",
+                "panel_name": canonical_panel,
+                "focus_result": focus_result,
+                "window": window_ribbon,
+                "inspection_before": _compact_studio_inspection(inspection_before),
+                "view_tab": view_tab,
+                "ribbon_inspection": _compact_studio_inspection(ribbon_inspection),
+                "satisfied": False,
+                "recommendations": [
+                    f"The View ribbon was opened, but no OCR ribbon slot matched {canonical_panel}. Use RobloxStudioInspectUI(include_ribbon=true) for a refreshed editor snapshot.",
+                ],
+                "coordinate_spaces": _ui_coordinate_spaces(),
+            }
+            return json.dumps(payload, indent=2)
+
+        ribbon_target = ribbon_matches[0]
+        pre_observation = desktop.observe_screen(window_title="Roblox Studio", reset=True, update_baseline=True)
+        _studio_click_target(ribbon_target)
+        desktop.invalidate_ui_map_cache("Roblox Studio")
+        post_wait = _wait_for_image_change(
+            window_title="Roblox Studio",
+            timeout_seconds=max(0.5, float(timeout_seconds)),
+            poll_interval=0.2,
+            min_change_ratio=0.005,
+            reset_baseline=False,
+        )
+        desktop.invalidate_ui_map_cache("Roblox Studio")
+        window_after = _studio_window_payload()
+        inspection_after = roblox_studio.inspect_studio_ui_regions(
+            window_after,
+            query=canonical_panel,
+            use_cache=False,
+        )
+        after_visible_matches = [
+            item for item in (inspection_after.get("matches") or []) if str(item.get("class") or "") == "RobloxStudioOCRRegion"
+        ]
+        target_after = after_visible_matches[0] if after_visible_matches else ribbon_target
+        satisfied = bool(after_visible_matches)
+        payload = {
+            "status": "completed" if satisfied else "uncertain",
+            "panel_name": canonical_panel,
+            "focus_result": focus_result,
+            "window": window_after,
+            "target": _compact_studio_candidate(target_after),
+            "view_tab": view_tab,
+            "inspection_before": _compact_studio_inspection(inspection_before),
+            "ribbon_inspection": _compact_studio_inspection(ribbon_inspection),
+            "inspection_after": _compact_studio_inspection(inspection_after),
+            "observation_before": _compact_observation_payload(pre_observation),
+            "observation_after": _compact_observation_payload(post_wait.get("observation")),
+            "changed": post_wait.get("satisfied"),
+            "satisfied": satisfied,
+            "recommendations": [
+                (
+                    f"{canonical_panel} now looks visible in the Studio dock layout."
+                    if satisfied
+                    else f"{canonical_panel} was toggled from the View ribbon, but the dock OCR did not confirm visibility. Use RobloxStudioInspectUI for a fresh panel snapshot before escalating to screenshots."
+                ),
+            ],
+            "coordinate_spaces": _ui_coordinate_spaces(),
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"RobloxStudioEnsurePanel error: {e}"
 
 
 # =========================== WINDOW MANAGEMENT ============================

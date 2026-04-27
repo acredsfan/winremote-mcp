@@ -5,6 +5,12 @@ WinRemote's `RobloxStudio*` tools can work in two modes:
 - Desktop-only mode: Studio is driven through window focus, keyboard, mouse, screenshots, OCR, and logs.
 - Harness-backed mode: a local HTTP harness plus a small Luau package inside the Studio playtest exposes structured state and test actions.
 
+For editor-mode game design, WinRemote also provides a small Roblox-specific navigation layer on top of the general Windows tools:
+
+- `RobloxStudioInspectUI` — structured Studio layout snapshot with tabs, dock panels, and optional ribbon OCR slots
+- `RobloxStudioOpenTab` — opens `Home`, `Model`, `Test`, `View`, or `Plugins`
+- `RobloxStudioEnsurePanel` — ensures common editor panels such as `Explorer`, `Properties`, `Toolbox`, or `Output`
+
 If you want unattended playtests, use the harness-backed mode.
 
 ## Start The Local Harness
@@ -106,6 +112,10 @@ return false, { message = "failed because ..." }
 
 ## Recommended Tool Usage
 
+- Use `RobloxStudioInspectUI` first when agents need to understand the current editor layout cheaply.
+- Use `RobloxStudioOpenTab` and `RobloxStudioEnsurePanel` for Studio navigation before falling back to raw clicks.
+- Use `UIFind`, `UIAct`, and `UISequence` first for Studio editor work such as opening `View`, targeting `Toolbox`, or finding `Explorer` / `Properties`
+- When Win32 control discovery only exposes compositor surfaces, those semantic tools now retry with a Studio-aware OCR fallback over ribbon tabs and major dock regions before escalating to screenshots
 - Use `RobloxStudioRunPlaytest` to enter Play Solo
 - Use `RobloxStudioGetOutput` and `RobloxStudioGetErrors` for Studio log feedback
 - Use `RobloxStudioGetTestState` for structured runtime state

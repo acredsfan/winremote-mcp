@@ -64,6 +64,12 @@ That launcher starts the Roblox Studio harness automatically if it is not alread
 
 WinRemote can now pair its `RobloxStudio*` MCP tools with a local harness so ChatGPT or GitHub Copilot Chat can run Studio playtests, read structured state, reset characters, teleport to checkpoints, and run named tests without manual intervention.
 
+For editor-mode workflows, WinRemote also includes dedicated Roblox Studio navigation tools layered on top of the general Windows semantic stack:
+
+- `RobloxStudioInspectUI` for a compact Studio layout snapshot
+- `RobloxStudioOpenTab` for top-level ribbon tabs like `Home`, `Model`, `Test`, `View`, and `Plugins`
+- `RobloxStudioEnsurePanel` for common editor panels like `Explorer`, `Properties`, `Toolbox`, and `Output`
+
 Start the local harness on the Windows machine:
 
 ```bash
@@ -487,8 +493,12 @@ See [SECURITY.md](SECURITY.md) for the full security guide.
 | UIWatch | Diff UI layouts between snapshots to detect added, removed, moved, or changed controls |
 | OCR | Extract text from screen via OCR (pytesseract or Windows built-in) |
 | ScreenRecord | Record screen activity as animated GIF |
+| RobloxStudioInspectUI | Structured snapshot of Studio tabs, dock panels, and optional ribbon command slots |
+| RobloxStudioOpenTab | Open Studio ribbon tabs like Home, Model, Test, View, and Plugins |
+| RobloxStudioEnsurePanel | Ensure Studio editor panels like Explorer, Properties, Toolbox, or Output are visible |
 
 All screen/UI tools use **virtual-screen coordinates** across all monitors. Structured payloads now include monitor metadata, virtual-screen bounds, and both absolute (`center`, `rect`) and window-relative (`relative_center`, `relative_rect`) coordinates. For screenshot-light workflows, start with `ObserveScreen`, `UIFind`, and `UIWatch`, use `UIAct` for single semantic actions or semantic waits (for example, waiting for a label to appear/disappear), or use `UISequence` to execute a short multi-step GUI routine server-side and return one compact summary. Fall back to `Snapshot` or `AnnotatedSnapshot` only when visual pixels are truly needed.
+
 | **Input** | |
 | Click | Mouse click (left/right/middle, single/double/hover) |
 | Type | Type text at coordinates |

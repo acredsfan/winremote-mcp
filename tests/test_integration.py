@@ -58,6 +58,9 @@ class TestMCPToolRegistration:
             "AssertProcessRunning",
             "TailFile",
             "CaptureFailureBundle",
+            "RobloxStudioInspectUI",
+            "RobloxStudioOpenTab",
+            "RobloxStudioEnsurePanel",
             "FocusWindow",
             "MinimizeAll",
             "App",
@@ -102,6 +105,9 @@ class TestMCPToolRegistration:
             "UIWatch",
             "RobloxStudioRunPlaytest",
             "RobloxStudioStopPlaytest",
+            "RobloxStudioInspectUI",
+            "RobloxStudioOpenTab",
+            "RobloxStudioEnsurePanel",
             "RobloxStudioGetOutput",
             "RobloxStudioGetErrors",
             "RobloxStudioGetTestState",
@@ -133,6 +139,8 @@ class TestMCPToolRegistration:
         assert "Click" in enabled
         assert "Type" in enabled
         assert "UIMap" in enabled
+        assert "RobloxStudioInspectUI" in enabled
+        assert "RobloxStudioEnsurePanel" in enabled
         assert "RobloxStudioRunPlaytest" in enabled
         assert "WaitForImageChange" in enabled
         assert "TaskCreate" not in enabled
@@ -145,6 +153,8 @@ class TestMCPToolRegistration:
         assert "UIAct" in enabled
         assert "Snapshot" in enabled
         assert "App" in enabled
+        assert "RobloxStudioInspectUI" in enabled
+        assert "RobloxStudioOpenTab" in enabled
         assert "RobloxStudioRunPlaytest" in enabled
         assert "RobloxStudioRunNamedTest" in enabled
         assert "Shell" not in enabled

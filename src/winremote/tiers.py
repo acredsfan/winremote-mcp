@@ -35,6 +35,7 @@ TOOL_TIERS = {
         "AssertProcessRunning",
         "TailFile",
         "CaptureFailureBundle",
+        "RobloxStudioInspectUI",
         "RobloxStudioGetOutput",
         "RobloxStudioGetErrors",
         "RobloxStudioGetTestState",
@@ -60,6 +61,8 @@ TOOL_TIERS = {
         "FocusWindow",
         "MinimizeAll",
         "App",
+        "RobloxStudioOpenTab",
+        "RobloxStudioEnsurePanel",
         "RobloxStudioRunPlaytest",
         "RobloxStudioStopPlaytest",
         "RobloxStudioResetCharacter",
@@ -120,6 +123,9 @@ CHATGPT_PROFILE_TOOLS = {
     "AssertProcessRunning",
     "TailFile",
     "CaptureFailureBundle",
+    "RobloxStudioInspectUI",
+    "RobloxStudioOpenTab",
+    "RobloxStudioEnsurePanel",
     "Shell",
     "FileRead",
     "FileWrite",
@@ -194,6 +200,9 @@ EXCEL_PROFILE_TOOLS = {
     # Diagnostics
     "TailFile",
     "CaptureFailureBundle",
+    "RobloxStudioInspectUI",
+    "RobloxStudioOpenTab",
+    "RobloxStudioEnsurePanel",
     "ReconnectSession",
 }
 _NAME_LOOKUP = {name.lower(): name for name in ALL_TOOLS}
