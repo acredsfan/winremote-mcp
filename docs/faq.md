@@ -120,6 +120,15 @@ Choose a port not used by other services. Common alternatives: 8080, 8000, 9090.
 winremote-mcp install  # Creates Windows scheduled task
 ```
 
+**Option 1b: Tray launcher startup (recommended for GUI workflows)**
+
+If you use `winremote-tray`, you can enable startup directly from the tray app:
+
+- Tray menu → `Startup` → `Start with Windows`
+- Optional: `Auto-start server on Windows startup`
+
+This uses your most recently saved tray launcher configuration.
+
 **Option 2: Startup Folder**
 1. Press `Win+R`, type `shell:startup`
 2. Create a batch file with: `winremote-mcp --host 127.0.0.1`
@@ -220,7 +229,7 @@ Restart Cursor after creating the file.
 **A:** Check these factors:
 
 - **DPI scaling**: Windows display scaling affects coordinates
-- **Multi-monitor**: Coordinates are relative to primary monitor
+- **Multi-monitor**: WinRemote tools use **virtual-screen coordinates** across all monitors
 - **Window focus**: Target window must be visible and active
 - **Screen resolution**: Use current resolution for coordinates
 
@@ -361,7 +370,16 @@ server {
 
 ### Q: Can I limit what tools are available?
 
-**A:** Currently, all 40+ tools are available when the server starts. Per-tool permissions are planned for a future release.
+**A:** Yes. WinRemote supports profile and tool filtering controls.
+
+Common options:
+
+- `--profile` (for example: `default`, `chatgpt`, `copilot`, `claude`, `excel`)
+- `--enable-tier3` / `--disable-tier2`
+- `--tools <csv>` for explicit allow-listing
+- `--exclude-tools <csv>` for explicit removal
+
+You can also set these in `winremote.toml`.
 
 Workaround: Run separate instances with different authentication keys for different use cases.
 

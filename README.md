@@ -481,9 +481,9 @@ See [SECURITY.md](SECURITY.md) for the full security guide.
 | Tool | Description |
 |------|-------------|
 | **Desktop** | |
-| Snapshot | Screenshot (JPEG, configurable quality/max_width) + window list + UI elements |
+| Snapshot | Screenshot (JPEG, configurable quality/max_width, optional `window_title`) + window list + UI elements |
 | ObserveScreen | Text-only GUI observation with server-side change detection and changed-region hints |
-| AnnotatedSnapshot | Screenshot with numbered labels on interactive elements |
+| AnnotatedSnapshot | Screenshot with numbered labels on interactive elements (optionally scoped by `window_title`) |
 | UIMap | Map window/panel/button coordinates (x,y and bounding boxes), optional OCR per element |
 | UIMapJson | Structured JSON version of UIMap for automation-friendly coordinate extraction |
 | UIFind | Find UI elements by label/class/OCR text and return ranked matches |

@@ -198,6 +198,9 @@ Create/edit `.cursor/mcp.json` in your project:
 # Capture only a specific window (title match)
 "Take a snapshot of the 'Roblox Studio' window only"
 
+# Capture one window with numbered UI labels
+"Take an annotated snapshot of the 'Roblox Studio' window"
+
 # Click at specific coordinates  
 "Click at position 500, 300"
 

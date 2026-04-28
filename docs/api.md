@@ -1,530 +1,135 @@
 # API Reference
 
-## Available Tools
+## Scope and source of truth
 
-WinRemote MCP provides 40+ tools organized into categories. All tools return structured responses with task IDs for monitoring.
+This page is a **practical reference** for commonly used WinRemote MCP tools.
 
-## Desktop Control
+Because tool signatures can evolve, your MCP client's tool schema (for example, Copilot/Claude tool metadata) is the runtime source of truth for exact argument contracts.
+
+## Core desktop and UI tools
 
 ### Snapshot
-Capture screenshot with optional compression and window information.
-
-**Parameters:**
-- `quality` (int, 1-100): JPEG quality, default 85
-- `max_width` (int): Resize width while preserving aspect ratio
-- `monitor` (int): Monitor number (1, 2, etc.), default captures all
-
-**Returns:**
-- Base64 encoded JPEG image
-- Window list with titles and positions
-- UI element information
-
-**Example:**
-```json
-{
-  "tool": "Snapshot",
-  "arguments": {
-    "quality": 90,
-    "max_width": 1920,
-    "monitor": 1
-  }
-}
-```
-
-### ObserveScreen
-Observe the GUI without attaching a screenshot to the chat.
-
-This tool captures a tiny in-memory digest, compares it with the previous digest
-for the same window/monitor/region, and returns structured JSON describing:
-
-- whether the screen changed
-- approximate changed regions
-- likely click-target labels from the mapped UI
-- recommendations for the next low-bandwidth step
-
-**Parameters:**
-- `window_title` (str, optional): Target a specific window by fuzzy title match
-- `include_text` (bool): Include OCR text in mapped controls when available
-- `monitor` (int): Monitor number, default 0 for all monitors
-- `left`, `top`, `right`, `bottom` (int, optional): Observe a specific region
-- `grid_size` (int): Digest grid density, default 6
-- `reset` (bool): Reset the baseline for this target
-- `update_baseline` (bool): Store the current digest as the new baseline
-
-**Returns:**
-- JSON payload with `changed`, `change_ratio`, `changed_regions`, `ui_summary`, and `searchable_preview`
-- no image payload
-
-**Example:**
-```json
-{
-  "tool": "ObserveScreen",
-  "arguments": {
-    "window_title": "Roblox Studio",
-    "grid_size": 6,
-    "include_text": true
-  }
-}
-```
-
-### UIAct
-Find a UI element, perform an action, and optionally wait for GUI change.
-
-This tool keeps the interaction loop inside the server so the agent does not
-need a screenshot-heavy multi-turn chat cycle for each micro-step.
-
-**Parameters:**
-- `query` (str): Label/class/text query for the target element
-- `window_title` (str, optional): Target window title
-- `action` (str): `click`, `double`, `hover`, `right_click`, or `type`
-- `text` (str, optional): Text to type when `action="type"`
-- `clear` (bool): Clear existing text before typing
-- `press_enter` (bool): Press Enter after typing
-- `wait_for_change` (bool): Observe whether the GUI changed after the action
-- `wait_for_query` (str, optional): Semantic query to wait for after the action
-- `wait_match_mode` (str): Match mode for `wait_for_query`, default `auto`
-- `wait_until` (str): Whether the semantic query should `appear` or `disappear`
-- `timeout_seconds` (float): How long to wait for change detection
-- `poll_interval` (float): Poll interval for change detection
-
-**Returns:**
-- JSON payload with the matched target, interaction summary, search diagnostics,
-  pre/post observation snapshots (text-only), and optional semantic wait results
-
-**Example:**
-```json
-{
-  "tool": "UIAct",
-  "arguments": {
-    "window_title": "Roblox Studio",
-    "query": "Inventory",
-    "action": "click",
-    "wait_for_change": true,
-    "wait_for_query": "Save Complete",
-    "wait_until": "appear"
-  }
-}
-```
-
-### UISequence
-Run a compact multi-step GUI workflow server-side.
-
-This is the lowest-overhead option for repetitive GUI work in chat because the
-agent can submit several steps at once and receive one summarized JSON payload.
-
-**Parameters:**
-- `steps_json` (str): JSON list of steps or `{ "steps": [...] }`
-- `window_title` (str, optional): Default window for steps that omit one
-- `compact` (bool): Return compact per-step summaries (default true)
-- `continue_on_error` (bool): Continue after step errors or no-match results
-
-**Supported step actions:**
-- `click`
-- `double`
-- `hover`
-- `right_click`
-- `type`
-- `observe`
-- `wait`
-- `waitfor`
-- `shortcut`
-
-For `waitfor`, provide:
-- `query` (str): semantic query to watch for
-- `wait_until` (str): `appear` or `disappear`
-- `timeout_seconds` (float): max wait time
-- `poll_interval` (float): poll interval
-
-**Example:**
-```json
-{
-  "tool": "UISequence",
-  "arguments": {
-    "window_title": "Roblox Studio",
-    "steps_json": "[{\"action\":\"click\",\"query\":\"Inventory\"},{\"action\":\"waitfor\",\"query\":\"Save Complete\",\"wait_until\":\"appear\"}]"
-  }
-}
-```
-
-### Click
-Perform mouse clicks at specified coordinates.
-
-**Parameters:**
-- `x` (int): X coordinate
-- `y` (int): Y coordinate  
-- `button` (str): "left", "right", or "middle", default "left"
-- `clicks` (int): Number of clicks, default 1
-- `action` (str): "click", "double", or "hover", default "click"
-
-**Example:**
-```json
-{
-  "tool": "Click", 
-  "arguments": {
-    "x": 500,
-    "y": 300,
-    "button": "left",
-    "clicks": 2
-  }
-}
-```
-
-### Type
-Type text at current cursor position or specified coordinates.
-
-**Parameters:**
-- `text` (str): Text to type
-- `x` (int, optional): X coordinate to click before typing
-- `y` (int, optional): Y coordinate to click before typing
-- `interval` (float): Delay between keystrokes, default 0.01
-
-### Scroll
-Scroll vertically or horizontally.
-
-**Parameters:**
-- `x` (int): X coordinate for scroll center
-- `y` (int): Y coordinate for scroll center
-- `direction` (str): "up", "down", "left", "right"
-- `clicks` (int): Number of scroll steps, default 3
-
-### Move
-Move mouse cursor or perform drag operations.
-
-**Parameters:**
-- `x` (int): Target X coordinate
-- `y` (int): Target Y coordinate
-- `drag` (bool): Whether to drag (hold button), default false
-- `duration` (float): Movement duration in seconds, default 0.5
-
-### Shortcut
-Execute keyboard shortcuts.
-
-**Parameters:**
-- `keys` (str): Key combination (e.g., "ctrl+c", "alt+tab", "win+r")
-
-**Examples:**
-- `"ctrl+c"` - Copy
-- `"alt+tab"` - Switch windows
-- `"win+r"` - Run dialog
-- `"ctrl+shift+esc"` - Task Manager
-
-## Window Management
-
-### FocusWindow
-Bring a window to the foreground by title match.
-
-**Parameters:**
-- `title` (str): Window title (supports partial/fuzzy matching)
-
-### MinimizeAll
-Minimize all windows (equivalent to Win+D).
-
-### App
-Launch, focus, or resize applications.
-
-**Parameters:**
-- `action` (str): "launch", "focus", or "resize"
-- `target` (str): Application name or executable path
-- `width` (int, optional): Window width for resize
-- `height` (int, optional): Window height for resize
-
-## File Operations
-
-### FileRead
-Read text file contents.
-
-**Parameters:**
-- `path` (str): File path (supports environment variables)
-- `encoding` (str): Text encoding, default "utf-8"
-
-### FileWrite
-Write content to a file.
-
-**Parameters:**
-- `path` (str): File path
-- `content` (str): Content to write
-- `encoding` (str): Text encoding, default "utf-8"
-- `append` (bool): Append to file, default false
-
-### FileList
-List directory contents.
-
-**Parameters:**
-- `path` (str): Directory path
-- `pattern` (str, optional): File pattern filter (e.g., "*.txt")
-- `recursive` (bool): Include subdirectories, default false
-
-### FileSearch
-Search for files by name pattern.
-
-**Parameters:**
-- `path` (str): Search root directory
-- `pattern` (str): File name pattern (supports wildcards)
-- `recursive` (bool): Search subdirectories, default true
-
-### FileDownload
-Download file as base64 (for binary files).
-
-**Parameters:**
-- `path` (str): File path
-- `max_size` (int): Maximum file size in bytes, default 10MB
-
-### FileUpload
-Upload file from base64 data.
-
-**Parameters:**
-- `path` (str): Destination file path
-- `data` (str): Base64 encoded file content
-- `overwrite` (bool): Overwrite existing file, default false
-
-## System Administration
-
-### Shell
-Execute PowerShell commands.
-
-**Parameters:**
-- `command` (str): PowerShell command to execute
-- `cwd` (str, optional): Working directory
-- `timeout` (int): Timeout in seconds, default 30
-
-### ListProcesses
-List running processes with resource usage.
-
-**Parameters:**
-- `sort_by` (str): Sort field ("cpu", "memory", "name"), default "cpu"
-- `limit` (int): Maximum number of processes, default 20
-
-### KillProcess
-Terminate a process by PID or name.
-
-**Parameters:**
-- `target` (str): Process PID (number) or name
-- `force` (bool): Force kill, default false
-
-### GetSystemInfo
-Retrieve system information.
-
-**Returns:**
-- OS version and architecture
-- CPU information and usage
-- Memory statistics
-- Disk space
-- Network interfaces
-
-### RegRead
-Read Windows Registry value.
-
-**Parameters:**
-- `key` (str): Registry key path (e.g., "HKEY_LOCAL_MACHINE\\SOFTWARE\\...")
-- `value` (str, optional): Value name (empty for default)
-
-### RegWrite
-Write Windows Registry value.
-
-**Parameters:**
-- `key` (str): Registry key path
-- `value` (str): Value name
-- `data` (str): Value data
-- `type` (str): Value type ("REG_SZ", "REG_DWORD", etc.)
-
-## Service Management
-
-### ServiceList
-List Windows services.
-
-**Parameters:**
-- `status` (str, optional): Filter by status ("running", "stopped", "all")
-
-### ServiceStart
-Start a Windows service.
-
-**Parameters:**
-- `name` (str): Service name
-
-### ServiceStop
-Stop a Windows service.
-
-**Parameters:**
-- `name` (str): Service name
-
-## Scheduled Tasks
-
-### TaskList
-List Windows scheduled tasks.
-
-**Parameters:**
-- `folder` (str, optional): Task folder path, default "\"
-
-### TaskCreate
-Create a Windows scheduled task.
-
-**Parameters:**
-- `name` (str): Task name
-- `command` (str): Command to execute
-- `trigger` (str): When to run ("startup", "daily", "weekly", etc.)
-- `user` (str, optional): User account, default current user
-
-### TaskDelete
-Delete a Windows scheduled task.
-
-**Parameters:**
-- `name` (str): Task name
-- `folder` (str, optional): Task folder, default "\"
-
-## Network Tools
-
-### Ping
-Ping a host to test connectivity.
-
-**Parameters:**
-- `host` (str): Hostname or IP address
-- `count` (int): Number of ping attempts, default 4
-- `timeout` (int): Timeout in seconds, default 5
-
-### PortCheck
-Check if a TCP port is open on a host.
-
-**Parameters:**
-- `host` (str): Hostname or IP address
-- `port` (int): Port number
-- `timeout` (int): Connection timeout, default 5
-
-### NetConnections
-List active network connections.
-
-**Parameters:**
-- `limit` (int): Maximum connections to return, default 50
-- `filter` (str, optional): Filter by protocol ("tcp", "udp")
-
-## Advanced Features
-
-### OCR
-Extract text from screen regions using OCR.
-
-**Parameters:**
-- `x1` (int): Top-left X coordinate
-- `y1` (int): Top-left Y coordinate  
-- `x2` (int): Bottom-right X coordinate
-- `y2` (int): Bottom-right Y coordinate
-- `lang` (str): OCR language, default "eng"
-
-**Supported Languages:**
-- `eng` - English
-- `chi_sim` - Chinese Simplified
-- `jpn` - Japanese
-- `kor` - Korean
-- Many more...
-
-### ScreenRecord
-Record screen activity as animated GIF.
-
-**Parameters:**
-- `duration` (int): Recording duration in seconds (2-10)
-- `fps` (int): Frames per second, default 5
-- `x` (int, optional): Recording region X
-- `y` (int, optional): Recording region Y
-- `width` (int, optional): Recording region width
-- `height` (int, optional): Recording region height
+Capture a screenshot plus textual desktop context (windows + interactive elements).
+
+**Common arguments:**
+- `use_vision` (bool): include image payload
+- `quality` (int): JPEG quality
+- `max_width` (int): optional downscale width
+- `monitor` (int): `0` for all monitors, or specific monitor id
+- `window_title` (str, optional): capture only a specific window (fuzzy/contains title match)
 
 ### AnnotatedSnapshot
-Take screenshot with numbered labels on interactive UI elements.
+Capture screenshot with numbered UI overlays for mapped interactive elements.
 
-**Parameters:**
-- `quality` (int): JPEG quality, default 85
-- `max_width` (int, optional): Resize width
+**Common arguments:**
+- `max_elements` (int)
+- `quality` (int)
+- `max_width` (int)
+- `window_title` (str, optional): restrict capture/annotation to one window
 
-**Returns:**
-- Annotated screenshot with red numbered labels
-- List of UI elements with coordinates and descriptions
+### ObserveScreen
+Low-bandwidth GUI observation (no screenshot attachment by default).
 
-## Task Management
+Useful for:
+- detecting whether UI changed
+- getting changed regions
+- obtaining searchable previews before using OCR/snapshots
 
-### GetRunningTasks
-List all currently active tasks.
+### UIMap / UIMapJson
+Map controls and return coordinate-rich UI structure.
 
-**Returns:**
-- Task IDs and status for running/pending tasks
-- Task start time and duration
-- Task type and parameters
+Useful for:
+- absolute screen clicks (`center` / `rect`)
+- window-relative automation (`relative_center` / `relative_rect`)
 
-### GetTaskStatus
-Get detailed information about a specific task.
+### UIFind / UIClick / UIAct / UISequence / UIWatch
+Semantic-first UI interaction stack:
 
-**Parameters:**
-- `task_id` (str, optional): Task ID to query (empty lists recent tasks)
+- `UIFind`: find candidate controls
+- `UIClick`: click best semantic match
+- `UIAct`: find + act + optionally observe/wait
+- `UISequence`: run compact multi-step workflows server-side
+- `UIWatch`: diff UI map changes over time
 
-### CancelTask
-Cancel a running or pending task.
+## Input and interaction tools
 
-**Parameters:**
-- `task_id` (str): Task ID to cancel
+- `Click`
+- `Type`
+- `Scroll`
+- `Move`
+- `Shortcut`
+- `Wait`
+- `KeyDown` / `KeyUp`
+- `MouseDown` / `MouseUp`
+- `MouseMoveRelative` / `MouseLook`
+- `WaitForRegionText`
+- `WaitForImageChange`
 
-## Clipboard Operations
+## Window and app tools
 
-### GetClipboard
-Read current clipboard content.
+- `FocusWindow`
+- `MinimizeAll`
+- `App` (`launch`, `switch`, `resize`)
 
-**Returns:**
-- Text content from clipboard
+## Diagnostics and debugging helpers
 
-### SetClipboard
-Write content to clipboard.
+- `TailFile`
+- `CaptureFailureBundle`
+- `AssertWindowActive`
+- `AssertProcessRunning`
 
-**Parameters:**
-- `text` (str): Text to copy to clipboard
+## Roblox Studio tools
 
-## Notification System
+### Studio editor/navigation
+- `RobloxStudioInspectUI`
+- `RobloxStudioOpenTab`
+- `RobloxStudioEnsurePanel`
 
-### Notification
-Display Windows toast notification.
+### Playtest and harness tools
+- `RobloxStudioRunPlaytest`
+- `RobloxStudioStopPlaytest`
+- `RobloxStudioGetOutput`
+- `RobloxStudioGetErrors`
+- `RobloxStudioGetTestState`
+- `RobloxStudioResetCharacter`
+- `RobloxStudioTeleportToCheckpoint`
+- `RobloxStudioRunNamedTest`
 
-**Parameters:**
-- `title` (str): Notification title
-- `message` (str): Notification message
-- `duration` (int): Display duration in seconds, default 5
+## System and admin tools
 
-## Event Log
+- `Shell`
+- `GetClipboard` / `SetClipboard`
+- `ListProcesses` / `KillProcess`
+- `GetSystemInfo`
+- `Notification`
+- `LockScreen`
+- `ReconnectSession`
 
-### EventLog
-Read Windows Event Log entries.
+## File tools
 
-**Parameters:**
-- `log_name` (str): Log name ("System", "Application", "Security")
-- `level` (str, optional): Filter by level ("Error", "Warning", "Information")
-- `limit` (int): Maximum entries, default 10
-- `hours` (int): Look back hours, default 24
+- `FileRead`
+- `FileWrite`
+- `FileList`
+- `FileSearch`
+- `FileDownload`
+- `FileUpload`
 
-## Authentication
+## Registry, services, tasks, and network
 
-For HTTP transport, include the Authorization header:
+- Registry: `RegRead`, `RegWrite`
+- Services: `ServiceList`, `ServiceStart`, `ServiceStop`
+- Scheduled tasks: `TaskList`, `TaskCreate`, `TaskDelete`
+- Network: `Scrape`, `Ping`, `PortCheck`, `NetConnections`
+- Event log: `EventLog`
 
-```http
-Authorization: Bearer your-secret-key
-```
+## Security notes
 
-The `/health` endpoint is always accessible without authentication.
+- Prefer localhost-only binding unless remote access is required.
+- Use authentication (`--auth-key`) for remote HTTP access.
+- Keep destructive tools (tier-3 style operations) disabled unless needed.
 
-## Error Responses
+For setup and operational examples, see:
 
-All tools return consistent error responses:
-
-```json
-{
-  "success": false,
-  "error": "Detailed error message",
-  "task_id": "abc123"
-}
-```
-
-## Response Format
-
-Successful tool responses include:
-
-```json
-{
-  "success": true,
-  "result": "Tool-specific result data",
-  "task_id": "abc123",
-  "duration_ms": 150
-}
-```
+- `docs/usage.md`
+- `docs/copilot-chat.md`
+- `docs/chatgpt.md`
