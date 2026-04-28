@@ -1524,15 +1524,33 @@ def _get_monitor_bbox(monitor: int) -> tuple[int, int, int, int] | None:
         raise
 
 
-def take_screenshot(quality: int = 75, max_width: int = 0, monitor: int = 0) -> str:
+def take_screenshot(
+    quality: int = 75,
+    max_width: int = 0,
+    monitor: int = 0,
+    window_title: str = "",
+) -> str:
     """Capture screen, return base64 JPEG. Resizes if wider than max_width.
 
     Args:
         quality: JPEG quality 1-100.
         max_width: Max width in pixels. 0=no resize (native resolution).
         monitor: 0=all monitors, 1/2/3=specific monitor.
+        window_title: Optional target window title (fuzzy/contains matched).
     """
-    img, _metadata = capture_image(monitor=monitor)
+    title = (window_title or "").strip()
+    if title:
+        window = _find_window_by_title(title)
+        if window is None:
+            raise ValueError(f"No window matching '{title}'")
+        img, _metadata = capture_image(
+            left=window.rect[0],
+            top=window.rect[1],
+            right=window.rect[2],
+            bottom=window.rect[3],
+        )
+    else:
+        img, _metadata = capture_image(monitor=monitor)
     # Resize if needed
     if max_width > 0 and img.width > max_width:
         ratio = max_width / img.width

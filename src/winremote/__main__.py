@@ -670,6 +670,7 @@ def Snapshot(
     quality: int = 75,
     max_width: int = 0,
     monitor: int = 0,
+    window_title: str = "",
 ) -> list:
     """Capture desktop screenshot, window list, and interactive UI elements.
 
@@ -678,6 +679,7 @@ def Snapshot(
         quality: JPEG quality 1-100 (default 75). Lower = smaller.
         max_width: Max image width in pixels. 0=native resolution (default). Set to e.g. 1920 to downscale.
         monitor: Monitor to capture. 0=all monitors (default), 1/2/3=specific monitor.
+        window_title: Optional target window title for window-only capture. When set, takes priority over monitor.
 
     Returns a list containing:
     - Screenshot image as JPEG (if use_vision=True)
@@ -691,7 +693,12 @@ def Snapshot(
         # Screenshot (auto-reconnect session if grab fails)
         if use_vision:
             try:
-                b64 = desktop.take_screenshot(quality=quality, max_width=max_width, monitor=monitor)
+                b64 = desktop.take_screenshot(
+                    quality=quality,
+                    max_width=max_width,
+                    monitor=monitor,
+                    window_title=window_title,
+                )
             except Exception as screenshot_error:
                 # Check if a disconnected session is the cause
                 reconnect_result = _ensure_session_connected()
@@ -700,7 +707,12 @@ def Snapshot(
                     return [f"Snapshot error: {screenshot_error}"]
                 # Session was disconnected and reconnected, retry
                 try:
-                    b64 = desktop.take_screenshot(quality=quality, max_width=max_width, monitor=monitor)
+                    b64 = desktop.take_screenshot(
+                        quality=quality,
+                        max_width=max_width,
+                        monitor=monitor,
+                        window_title=window_title,
+                    )
                 except Exception as retry_error:
                     return [f"Snapshot error (after session reconnect): {retry_error}"]
             parts.append(ImageContent(type="image", data=b64, mimeType="image/jpeg"))
@@ -708,6 +720,9 @@ def Snapshot(
         # Window list
         windows = desktop.enumerate_windows()
         win_lines = [f"**System Language:** {desktop._get_system_language()}"]
+        if window_title.strip():
+            win_lines.append(f"**Screenshot Target:** Window '{window_title.strip()}'")
+            win_lines.append("")
         if monitor_ctx["monitors"]:
             win_lines.extend(["", "**Monitors:**"])
             for mon in monitor_ctx["monitors"]:
@@ -2646,6 +2661,7 @@ def AnnotatedSnapshot(
     max_elements: int = 30,
     quality: int = 75,
     max_width: int = 0,
+    window_title: str = "",
 ) -> list:
     """Take a screenshot with numbered labels on interactive UI elements.
 
@@ -2656,6 +2672,7 @@ def AnnotatedSnapshot(
         max_elements: Maximum number of elements to annotate (default 30).
         quality: JPEG quality 1-100 (default 75).
         max_width: Max image width in pixels. 0=native resolution (default).
+        window_title: Optional target window title for window-only capture and annotation.
     """
     try:
         import io
@@ -2664,13 +2681,46 @@ def AnnotatedSnapshot(
 
         # Take screenshot (auto-reconnect session if grab fails)
         try:
-            img, capture_meta = desktop.capture_image()
+            target_window_title = window_title.strip()
+            if target_window_title:
+                target_window = desktop._find_window_by_title(target_window_title)
+                if target_window is None:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"AnnotatedSnapshot error: No window matching '{target_window_title}'",
+                        )
+                    ]
+                img, capture_meta = desktop.capture_image(
+                    left=target_window.rect[0],
+                    top=target_window.rect[1],
+                    right=target_window.rect[2],
+                    bottom=target_window.rect[3],
+                )
+            else:
+                img, capture_meta = desktop.capture_image()
         except Exception as screenshot_error:
             reconnect_result = _ensure_session_connected()
             if reconnect_result is not None:
                 return [TextContent(type="text", text=f"AnnotatedSnapshot error: {screenshot_error}")]
             try:
-                img, capture_meta = desktop.capture_image()
+                if target_window_title:
+                    target_window = desktop._find_window_by_title(target_window_title)
+                    if target_window is None:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"AnnotatedSnapshot error: No window matching '{target_window_title}'",
+                            )
+                        ]
+                    img, capture_meta = desktop.capture_image(
+                        left=target_window.rect[0],
+                        top=target_window.rect[1],
+                        right=target_window.rect[2],
+                        bottom=target_window.rect[3],
+                    )
+                else:
+                    img, capture_meta = desktop.capture_image()
             except Exception as retry_error:
                 return [
                     TextContent(
@@ -2687,16 +2737,19 @@ def AnnotatedSnapshot(
         scale = img.width / original_width if original_width else 1.0
 
         # Get interactive elements
-        mapped = desktop.map_ui_elements(max_elements=max_elements)
+        mapped = desktop.map_ui_elements(window_title=window_title, max_elements=max_elements)
         elements = mapped[1:] if len(mapped) > 1 else []
         if not elements:
             # Return screenshot with no annotations
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=quality)
             b64 = base64.b64encode(buf.getvalue()).decode()
+            text_note = "No interactive elements found."
+            if window_title.strip():
+                text_note = f"No interactive elements found for window '{window_title.strip()}'."
             return [
                 ImageContent(type="image", data=b64, mimeType="image/jpeg"),
-                TextContent(type="text", text="No interactive elements found."),
+                TextContent(type="text", text=text_note),
             ]
 
         draw = ImageDraw.Draw(img)
@@ -2739,7 +2792,12 @@ def AnnotatedSnapshot(
         img.save(buf, format="JPEG", quality=quality)
         b64 = base64.b64encode(buf.getvalue()).decode()
 
-        text_summary = f"**Annotated {len(element_lines)} elements:**\n" + "\n".join(element_lines)
+        target_prefix = (
+            f"**Target Window:** {window_title.strip()}\n\n"
+            if window_title.strip()
+            else ""
+        )
+        text_summary = target_prefix + f"**Annotated {len(element_lines)} elements:**\n" + "\n".join(element_lines)
         return [
             ImageContent(type="image", data=b64, mimeType="image/jpeg"),
             TextContent(type="text", text=text_summary),

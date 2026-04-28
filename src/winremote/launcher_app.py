@@ -8,6 +8,7 @@ or (after installing):
 
 from __future__ import annotations
 
+import argparse
 import sys
 
 
@@ -25,7 +26,12 @@ def main() -> None:
         print("Install GUI dependencies with: pip install winremote-mcp[gui]", file=sys.stderr)
         sys.exit(1)
 
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--startup", action="store_true", help="Indicates launcher was started by Windows startup")
+    args, _ = parser.parse_known_args()
+
     app = TrayApp()
+    app.set_startup_mode(args.startup)
     app.run()
 
 

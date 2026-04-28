@@ -265,6 +265,36 @@ class TestSnapshotAutoReconnect:
                 assert text_parts
                 assert "error" in text_parts[0].lower()
 
+    def test_snapshot_window_title_is_forwarded(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            _mock_monitor_context(mock_desktop)
+            mock_desktop.take_screenshot.return_value = "base64data"
+            mock_desktop.enumerate_windows.return_value = []
+            mock_desktop.get_interactive_elements.return_value = []
+            mock_desktop._get_system_language.return_value = "en-US"
+
+            result = _call_tool("Snapshot", window_title="Notepad")
+
+            assert isinstance(result, list)
+            mock_desktop.take_screenshot.assert_called_once_with(
+                quality=75,
+                max_width=0,
+                monitor=0,
+                window_title="Notepad",
+            )
+
+
+class TestAnnotatedSnapshotWindowCapture:
+    def test_annotated_snapshot_returns_error_when_window_missing(self):
+        with patch("winremote.__main__.desktop") as mock_desktop:
+            mock_desktop._find_window_by_title.return_value = None
+
+            result = _call_tool("AnnotatedSnapshot", window_title="MissingWindow")
+
+            assert isinstance(result, list)
+            assert result
+            assert "No window matching 'MissingWindow'" in result[0].text
+
 
 class TestUIMap:
     def test_no_win32(self):

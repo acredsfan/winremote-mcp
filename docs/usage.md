@@ -59,6 +59,30 @@ Direct fallback (works even when PATH is stale):
 python -m winremote.launcher_app
 ```
 
+#### Configure `winremote-tray` to start with Windows (and run last config)
+
+`winremote-tray` can now register itself in the current user's Windows startup list and optionally auto-start the MCP server using your **last saved launcher configuration** (profile, host/port, auth, SSL, tool filters, etc.).
+
+Use either route:
+
+- **Tray menu**: `Startup` → toggle:
+  - `Start with Windows`
+  - `Auto-start server on Windows startup`
+- **Settings dialog**: `General` tab:
+  - `Start winremote-tray with Windows`
+  - `On Windows startup, auto-start server`
+
+How it works:
+
+- Startup registration is per-user in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+- The launcher starts in startup mode (`pythonw.exe -m winremote.launcher_app --startup`)
+- If `On Windows startup, auto-start server` is enabled, it starts the server with the most recently saved launcher settings file at `%APPDATA%\winremote\launcher_settings.toml`
+
+Tip: this startup behavior is independent from `Auto-start on launcher open`:
+
+- `Auto-start on launcher open` applies to manual launches too
+- `On Windows startup, auto-start server` applies specifically to Windows startup launches
+
 ### Remote Access
 
 ```bash
@@ -170,6 +194,9 @@ Create/edit `.cursor/mcp.json` in your project:
 
 # Take a screenshot
 "Take a screenshot of the current desktop"
+
+# Capture only a specific window (title match)
+"Take a snapshot of the 'Roblox Studio' window only"
 
 # Click at specific coordinates  
 "Click at position 500, 300"

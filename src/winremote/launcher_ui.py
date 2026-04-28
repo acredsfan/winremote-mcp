@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -57,6 +58,8 @@ class LauncherSettings:
     history_retention_days: int = 30
     log_max_lines: int = 2000
     auto_start_server: bool = False
+    start_with_windows: bool = False
+    start_server_on_windows_startup: bool = True
     selected_profile: str = "default"
     server_host: str = "127.0.0.1"
     server_port: int = 8090
@@ -95,6 +98,65 @@ def _settings_path() -> Path:
     else:
         base = Path("~/.config").expanduser()
     return base / "winremote" / "launcher_settings.toml"
+
+
+_STARTUP_RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_STARTUP_ENTRY_NAME = "winremote-tray"
+
+
+def _launcher_startup_command() -> str:
+    """Return command used for Windows Run key startup entry."""
+    exe = Path(sys.executable)
+    pythonw = exe.with_name("pythonw.exe")
+    launcher_exe = pythonw if pythonw.exists() else exe
+    return subprocess.list2cmdline([
+        str(launcher_exe),
+        "-m",
+        "winremote.launcher_app",
+        "--startup",
+    ])
+
+
+def _is_windows_startup_enabled() -> bool:
+    """Return True if current-user Windows startup registration exists."""
+    if sys.platform != "win32":
+        return False
+
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _STARTUP_RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, _STARTUP_ENTRY_NAME)
+            return True
+    except OSError:
+        return False
+
+
+def _set_windows_startup_enabled(enabled: bool) -> tuple[bool, str]:
+    """Enable/disable current-user startup registration for the tray launcher."""
+    if sys.platform != "win32":
+        return False, "Windows startup registration is only available on Windows."
+
+    import winreg
+
+    try:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _STARTUP_RUN_KEY_PATH) as key:
+            if enabled:
+                winreg.SetValueEx(key, _STARTUP_ENTRY_NAME, 0, winreg.REG_SZ, _launcher_startup_command())
+                return True, "Enabled Start with Windows for winremote-tray."
+
+            try:
+                winreg.DeleteValue(key, _STARTUP_ENTRY_NAME)
+            except FileNotFoundError:
+                pass
+            return True, "Disabled Start with Windows for winremote-tray."
+    except OSError as exc:
+        return False, f"Failed to update Windows startup registration: {exc}"
+
+
+def _sync_windows_startup_registration(settings: LauncherSettings) -> tuple[bool, str]:
+    """Ensure Windows startup registry state matches launcher settings."""
+    return _set_windows_startup_enabled(settings.start_with_windows)
 
 
 def _is_user_admin() -> bool:
@@ -568,12 +630,14 @@ class DashboardWindow:
         self._srv_profile_var = tk.StringVar(value="–")
         self._srv_url_var = tk.StringVar(value="–")
         self._srv_conflict_var = tk.StringVar(value="–")
+        self._srv_startup_var = tk.StringVar(value="–")
 
         _grid_row(srv_lf, 0, "State:", self._srv_state_var)
         _grid_row(srv_lf, 1, "Uptime:", self._srv_uptime_var)
         _grid_row(srv_lf, 2, "Profile:", self._srv_profile_var)
         _grid_row(srv_lf, 3, "URL:", self._srv_url_var)
         _grid_row(srv_lf, 4, "Port conflict:", self._srv_conflict_var)
+        _grid_row(srv_lf, 5, "Startup:", self._srv_startup_var)
 
         # Server action buttons
         srv_btn = ttk.Frame(parent)
@@ -1004,6 +1068,7 @@ class DashboardWindow:
         self._srv_profile_var.set(srv.settings.profile)
         self._srv_url_var.set(srv.base_url)
         self._srv_conflict_var.set(srv.port_conflict_summary)
+        self._srv_startup_var.set(app.describe_startup_status())
 
         # Tunnel
         tun = app.tunnel_manager
@@ -1227,6 +1292,22 @@ class SettingsDialog:
         ttk.Label(parent, text="Log buffer max lines:").grid(row=2, column=0, sticky="w", padx=8, pady=4)
         ttk.Spinbox(parent, from_=200, to=10000, textvariable=log_var, width=8).grid(row=2, column=1, sticky="w", padx=4)
 
+        sw_var = tk.BooleanVar(value=s.start_with_windows)
+        v["start_with_windows"] = sw_var
+        ttk.Label(parent, text="Start winremote-tray with Windows:").grid(row=3, column=0, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(parent, variable=sw_var).grid(row=3, column=1, sticky="w", padx=4)
+
+        startup_server_var = tk.BooleanVar(value=s.start_server_on_windows_startup)
+        v["start_server_on_windows_startup"] = startup_server_var
+        ttk.Label(parent, text="On Windows startup, auto-start server:").grid(row=4, column=0, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(parent, variable=startup_server_var).grid(row=4, column=1, sticky="w", padx=4)
+
+        ttk.Label(
+            parent,
+            text="Uses current launcher settings/profile as the last configuration.",
+            foreground="#6b7280",
+        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 0))
+
         parent.columnconfigure(1, weight=1)
         return v
 
@@ -1275,6 +1356,8 @@ class SettingsDialog:
             s.log_max_lines = int(v["log_max_lines"].get())
         except (ValueError, tk.TclError):
             pass
+        s.start_with_windows = bool(v["start_with_windows"].get())
+        s.start_server_on_windows_startup = bool(v["start_server_on_windows_startup"].get())
 
 
 # ---------------------------------------------------------------------------
@@ -1287,10 +1370,16 @@ class TrayApp:
     def __init__(self) -> None:
         self.settings = load_launcher_settings()
         _enabled_profiles(self.settings)
+        self._started_from_startup = False
         self._is_admin = _is_user_admin()
         changes = _apply_non_admin_safe_defaults(self.settings, is_admin=self._is_admin)
         if changes:
             save_launcher_settings(self.settings)
+
+        startup_ok, startup_msg = _sync_windows_startup_registration(self.settings)
+        self._startup_registration_warning: str | None = None
+        if not startup_ok and sys.platform == "win32":
+            self._startup_registration_warning = startup_msg
 
         self.history = HistoryStore()
         self._log_buffer = _LogBuffer(max_lines=self.settings.log_max_lines)
@@ -1322,6 +1411,22 @@ class TrayApp:
         self._tray_icon: Any = None
         self._startup_setting_changes = changes
 
+    def set_startup_mode(self, started_from_startup: bool) -> None:
+        """Set whether this launcher instance was started by Windows startup."""
+        self._started_from_startup = started_from_startup
+
+    def describe_startup_status(self) -> str:
+        """Return a short status string for startup registration and behavior."""
+        if sys.platform != "win32":
+            return "Not available (non-Windows)"
+
+        registered = _is_windows_startup_enabled()
+        if not registered:
+            return "Disabled"
+
+        startup_server = "on" if self.settings.start_server_on_windows_startup else "off"
+        return f"Enabled (server auto-start on startup: {startup_server})"
+
     # ------------------------------------------------------------------
     # Entry point
     # ------------------------------------------------------------------
@@ -1352,7 +1457,12 @@ class TrayApp:
                 "Applied non-admin safety defaults:\n- " + "\n- ".join(self._startup_setting_changes),
             ))
 
-        if self.settings.auto_start_server:
+        if self._startup_registration_warning:
+            self._ui_queue.put(("notify", self._startup_registration_warning))
+
+        if self.settings.auto_start_server or (
+            self._started_from_startup and self.settings.start_server_on_windows_startup
+        ):
             self.start_server()
 
         self._start_tray()
@@ -1457,6 +1567,11 @@ class TrayApp:
                     "Adjusted for non-admin compatibility:\n- " + "\n- ".join(changes),
                 ))
             self._log_buffer._max = new_settings.log_max_lines
+
+            startup_ok, startup_msg = _sync_windows_startup_registration(self.settings)
+            if not startup_ok and sys.platform == "win32":
+                self._ui_queue.put(("notify", startup_msg))
+
             # Rebuild managers with new settings
             self.server_manager.update_settings(self._make_server_settings())
             self.tunnel_manager.update_settings(self._make_tunnel_settings())
@@ -1639,6 +1754,18 @@ class TrayApp:
             for p in VALID_PROFILES
         ]
 
+        startup_items = [
+            TrayItem(
+                f"[{'x' if self.settings.start_with_windows else ' '}] Start with Windows",
+                lambda _: self._toggle_start_with_windows(),
+            ),
+            TrayItem(
+                f"[{'x' if self.settings.start_server_on_windows_startup else ' '}] Auto-start server on Windows startup",
+                lambda _: self._toggle_start_server_on_windows_startup(),
+                enabled=self.settings.start_with_windows,
+            ),
+        ]
+
         # Server submenu
         server_items = [
             TrayItem("Start", lambda _: self.start_server(), enabled=server_stopped),
@@ -1673,12 +1800,37 @@ class TrayApp:
             TrayMenu.SEPARATOR,
             TrayItem("Server", TrayMenu(*server_items)),
             TrayItem("Tunnel", TrayMenu(*tunnel_items)),
+            TrayItem("Startup", TrayMenu(*startup_items)),
             TrayMenu.SEPARATOR,
             TrayItem("Dashboard", lambda _: self._ui_queue.put(("show_dashboard",))),
             TrayItem("View Logs", lambda _: self._ui_queue.put(("show_logs",))),
             TrayMenu.SEPARATOR,
             TrayItem("Quit", lambda _: self._ui_queue.put(("quit",))),
         )
+
+    def _toggle_start_with_windows(self) -> None:
+        target = not self.settings.start_with_windows
+        self.settings.start_with_windows = target
+        ok, msg = _sync_windows_startup_registration(self.settings)
+        if not ok:
+            self.settings.start_with_windows = not target
+            self._ui_queue.put(("notify", msg))
+            return
+
+        save_launcher_settings(self.settings)
+        self._rebuild_tray_menu()
+        self._ui_queue.put(("notify", msg))
+
+    def _toggle_start_server_on_windows_startup(self) -> None:
+        if not self.settings.start_with_windows:
+            self._ui_queue.put(("notify", "Enable 'Start with Windows' first."))
+            return
+
+        self.settings.start_server_on_windows_startup = not self.settings.start_server_on_windows_startup
+        save_launcher_settings(self.settings)
+        self._rebuild_tray_menu()
+        state = "enabled" if self.settings.start_server_on_windows_startup else "disabled"
+        self._ui_queue.put(("notify", f"Auto-start server on Windows startup {state}."))
 
     def _make_profile_action(self, profile: str):
         def _action(_icon, _item):

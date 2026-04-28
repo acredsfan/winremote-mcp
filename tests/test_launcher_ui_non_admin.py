@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,10 @@ from winremote.launcher_ui import (
     _apply_non_admin_safe_defaults,
     _coerce_setting_value,
     _enabled_profiles,
+    _is_windows_startup_enabled,
+    _launcher_startup_command,
     _parse_csv,
+    _set_windows_startup_enabled,
     _set_profile_enabled,
     load_launcher_settings,
     save_launcher_settings,
@@ -56,6 +60,109 @@ def test_coerce_setting_value_bool_strings():
 def test_parse_csv_trims_and_drops_empty_tokens():
     assert _parse_csv(" Snapshot, UIFind ,, Shell ") == ["Snapshot", "UIFind", "Shell"]
     assert _parse_csv("") == []
+
+
+def test_launcher_startup_command_includes_startup_flag(tmp_path: Path, monkeypatch):
+    exe = tmp_path / "python.exe"
+    exe.write_text("", encoding="utf-8")
+    (tmp_path / "pythonw.exe").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "executable", str(exe))
+
+    cmd = _launcher_startup_command()
+
+    assert "winremote.launcher_app" in cmd
+    assert "--startup" in cmd
+
+
+class _FakeWinRegKey:
+    def __init__(self, store: dict[str, str]) -> None:
+        self._store = store
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _fake_winreg_module(store: dict[str, str]):
+    def open_key(_root, _path, *_args):
+        if "winremote-tray" not in store:
+            raise OSError("missing")
+        return _FakeWinRegKey(store)
+
+    def create_key(_root, _path):
+        return _FakeWinRegKey(store)
+
+    def query_value_ex(_key, name):
+        if name not in store:
+            raise OSError("missing")
+        return store[name], 1
+
+    def set_value_ex(_key, name, _reserved, _reg_type, value):
+        store[name] = value
+
+    def delete_value(_key, name):
+        if name not in store:
+            raise FileNotFoundError(name)
+        del store[name]
+
+    return types.SimpleNamespace(
+        HKEY_CURRENT_USER=object(),
+        KEY_READ=1,
+        REG_SZ=1,
+        OpenKey=open_key,
+        CreateKey=create_key,
+        QueryValueEx=query_value_ex,
+        SetValueEx=set_value_ex,
+        DeleteValue=delete_value,
+    )
+
+
+def test_windows_startup_registration_roundtrip(monkeypatch):
+    store: dict[str, str] = {}
+    fake_winreg = _fake_winreg_module(store)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+
+    ok_enable, _ = _set_windows_startup_enabled(True)
+    assert ok_enable is True
+    assert "winremote-tray" in store
+    assert _is_windows_startup_enabled() is True
+
+    ok_disable, _ = _set_windows_startup_enabled(False)
+    assert ok_disable is True
+    assert "winremote-tray" not in store
+    assert _is_windows_startup_enabled() is False
+
+
+def test_trayapp_describe_startup_status(monkeypatch):
+    store: dict[str, str] = {}
+    fake_winreg = _fake_winreg_module(store)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+
+    import winremote.launcher_ui as launcher_ui
+
+    class _FakeTk:
+        def withdraw(self):
+            return None
+
+        def title(self, _s):
+            return None
+
+    monkeypatch.setattr(launcher_ui.tk, "Tk", _FakeTk)
+
+    app = launcher_ui.TrayApp()
+    app.settings.start_server_on_windows_startup = True
+
+    assert app.describe_startup_status() == "Disabled"
+
+    _set_windows_startup_enabled(True)
+    assert app.describe_startup_status() == "Enabled (server auto-start on startup: on)"
+
+    app.settings.start_server_on_windows_startup = False
+    assert app.describe_startup_status() == "Enabled (server auto-start on startup: off)"
 
 
 def test_settings_roundtrip_preserves_false_booleans(tmp_path: Path, monkeypatch):
