@@ -37,7 +37,7 @@ try:
 except ImportError:
     _HAS_PYSTRAY = False
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 from .launcher import ServerManager, ServerSettings, ServerState, VALID_PROFILES, PROFILE_DESCRIPTIONS
 from .launcher_history import EventType, HistoryEvent, HistoryStore
@@ -537,6 +537,31 @@ def _make_icon(state: ServerState, tunnel: TunnelState = TunnelState.STOPPED) ->
         outline="#ffffff",
         width=2,
     )
+    return img
+
+
+def _make_app_icon() -> Image.Image:
+    """Create a branded 64x64 application icon for window title bars and taskbar."""
+    size = 64
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    # Dark-blue rounded-square background
+    draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=12, fill="#1e3a8a")
+
+    # Monitor body
+    mx, my, mw, mh = 8, 10, size - 16, size - 30
+    draw.rounded_rectangle([mx, my, mx + mw, my + mh], radius=3, outline="#ffffff", width=3)
+
+    # Monitor stand
+    cx = size // 2
+    draw.line([(cx, my + mh), (cx, size - 10)], fill="#ffffff", width=3)
+    draw.line([(cx - 9, size - 10), (cx + 9, size - 10)], fill="#ffffff", width=3)
+
+    # Green connectivity dot inside monitor
+    cy = my + mh // 2
+    draw.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], fill="#22c55e")
+
     return img
 
 
@@ -1401,6 +1426,10 @@ class TrayApp:
         self._root = tk.Tk()
         self._root.withdraw()
         self._root.title("winremote-mcp Launcher")
+
+        # Set branded window icon (applies to all Toplevel children too)
+        self._tk_icon = ImageTk.PhotoImage(_make_app_icon())
+        self._root.iconphoto(True, self._tk_icon)  # type: ignore[arg-type]
 
         # Cross-thread UI action queue
         self._ui_queue: queue.Queue[tuple[str, ...]] = queue.Queue()
