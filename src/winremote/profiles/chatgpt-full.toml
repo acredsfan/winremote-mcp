@@ -1,0 +1,8 @@
+name = "chatgpt-full"
+description = "Full ChatGPT workflow profile."
+
+extends = "chatgpt"
+
+enabled_tools = []
+disabled_tools = []
+require_confirmation = []

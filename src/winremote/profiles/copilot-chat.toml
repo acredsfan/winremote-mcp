@@ -1,0 +1,8 @@
+name = "copilot-chat"
+description = "Copilot Chat profile for VS Code workflows."
+
+extends = "copilot"
+
+enabled_tools = []
+disabled_tools = []
+require_confirmation = []

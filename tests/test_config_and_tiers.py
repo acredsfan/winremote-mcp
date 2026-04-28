@@ -59,6 +59,60 @@ def test_tier_resolution_defaults():
     enabled = resolve_enabled_tools()
     assert "Snapshot" in enabled
     assert "Click" in enabled
+    assert "ListRecordings" in enabled
+    assert "GetRecordingManifest" in enabled
+    assert "AnalyzeRecording" in enabled
+    assert "RenderSessionReport" in enabled
+    assert "LaunchDebugBrowser" in enabled
+    assert "ListBrowserTabs" in enabled
+    assert "GetBrowserConsoleLogs" in enabled
+    assert "GetBrowserNetworkRequests" in enabled
+    assert "GetBrowserDomText" in enabled
+    assert "ClickDomElement" in enabled
+    assert "SessionNoteAdd" in enabled
+    assert "SessionNoteList" in enabled
+    assert "SessionNoteSummarize" in enabled
+    assert "CreateTerminalSession" in enabled
+    assert "ListTerminalSessions" in enabled
+    assert "ReadTerminalOutput" in enabled
+    assert "SendTerminalInput" in enabled
+    assert "WaitForTerminalOutput" in enabled
+    assert "StopTerminalSession" in enabled
+    assert "GetActionBudgetStatus" in enabled
+    assert "ConfigureActionBudget" in enabled
+    assert "ResetActionBudget" in enabled
+    assert "DetectKnownIssues" in enabled
+    assert "GetAgentCapabilityGuide" in enabled
+    assert "CollectProjectContext" in enabled
+    assert "VSCodeListWindows" in enabled
+    assert "VSCodeGetActiveFile" in enabled
+    assert "VSCodeListOpenFiles" in enabled
+    assert "VSCodeGetDiagnostics" in enabled
+    assert "VSCodeReadProblemsPanel" in enabled
+    assert "VSCodeReadTerminal" in enabled
+    assert "VSCodeOpenFile" in enabled
+    assert "VSCodeRunCommand" in enabled
+    assert "WaitForChange" in enabled
+    assert "ComputerUseStep" in enabled
+    assert "ComputerUseTask" in enabled
+    assert "UndoLastAction" in enabled
+    assert "SaveUISelector" in enabled
+    assert "FindUISelector" in enabled
+    assert "ClickUISelector" in enabled
+    assert "AgentStatusReport" in enabled
+    assert "AppHealthCheck" in enabled
+    assert "ClipboardSafeRead" in enabled
+    assert "ClipboardSafeWrite" in enabled
+    assert "PasteText" in enabled
+    assert "StartFileWatch" in enabled
+    assert "StopFileWatch" in enabled
+    assert "ListFileChanges" in enabled
+    assert "HumanHandoff" in enabled
+    assert "ResumeHumanHandoff" in enabled
+    assert "HandoffStatus" in enabled
+    assert "ListMonitors" in enabled
+    assert "GetActiveWindow" in enabled
+    assert "GetWindowBounds" in enabled
     assert "Shell" not in enabled
 
 
@@ -96,6 +150,62 @@ def test_chatgpt_profile_resolution():
     assert "RobloxStudioEnsurePanel" in enabled
     assert "RobloxStudioRunPlaytest" in enabled
     assert "WaitForImageChange" in enabled
+    assert "StartScreenRecording" in enabled
+    assert "StopScreenRecording" in enabled
+    assert "ListRecordings" in enabled
+    assert "GetRecordingManifest" in enabled
+    assert "AnalyzeRecording" in enabled
+    assert "RenderSessionReport" in enabled
+    assert "LaunchDebugBrowser" in enabled
+    assert "ListBrowserTabs" in enabled
+    assert "GetBrowserConsoleLogs" in enabled
+    assert "GetBrowserNetworkRequests" in enabled
+    assert "GetBrowserDomText" in enabled
+    assert "ClickDomElement" in enabled
+    assert "SessionNoteAdd" in enabled
+    assert "SessionNoteList" in enabled
+    assert "SessionNoteSummarize" in enabled
+    assert "CreateTerminalSession" in enabled
+    assert "ListTerminalSessions" in enabled
+    assert "ReadTerminalOutput" in enabled
+    assert "SendTerminalInput" in enabled
+    assert "WaitForTerminalOutput" in enabled
+    assert "StopTerminalSession" in enabled
+    assert "GetActionBudgetStatus" in enabled
+    assert "ConfigureActionBudget" in enabled
+    assert "ResetActionBudget" in enabled
+    assert "DetectKnownIssues" in enabled
+    assert "GetAgentCapabilityGuide" in enabled
+    assert "CollectProjectContext" in enabled
+    assert "VSCodeListWindows" in enabled
+    assert "VSCodeGetActiveFile" in enabled
+    assert "VSCodeListOpenFiles" in enabled
+    assert "VSCodeGetDiagnostics" in enabled
+    assert "VSCodeReadProblemsPanel" in enabled
+    assert "VSCodeReadTerminal" in enabled
+    assert "VSCodeOpenFile" in enabled
+    assert "VSCodeRunCommand" in enabled
+    assert "WaitForChange" in enabled
+    assert "ComputerUseStep" in enabled
+    assert "ComputerUseTask" in enabled
+    assert "UndoLastAction" in enabled
+    assert "SaveUISelector" in enabled
+    assert "FindUISelector" in enabled
+    assert "ClickUISelector" in enabled
+    assert "AgentStatusReport" in enabled
+    assert "AppHealthCheck" in enabled
+    assert "ClipboardSafeRead" in enabled
+    assert "ClipboardSafeWrite" in enabled
+    assert "PasteText" in enabled
+    assert "StartFileWatch" in enabled
+    assert "StopFileWatch" in enabled
+    assert "ListFileChanges" in enabled
+    assert "HumanHandoff" in enabled
+    assert "ResumeHumanHandoff" in enabled
+    assert "HandoffStatus" in enabled
+    assert "ListMonitors" in enabled
+    assert "GetActiveWindow" in enabled
+    assert "GetWindowBounds" in enabled
     assert "TaskCreate" not in enabled
 
 
@@ -115,6 +225,62 @@ def test_copilot_profile_resolution():
     assert "RobloxStudioOpenTab" in enabled
     assert "RobloxStudioRunPlaytest" in enabled
     assert "RobloxStudioRunNamedTest" in enabled
+    assert "StartScreenRecording" in enabled
+    assert "StopScreenRecording" in enabled
+    assert "ListRecordings" in enabled
+    assert "GetRecordingManifest" in enabled
+    assert "AnalyzeRecording" in enabled
+    assert "RenderSessionReport" in enabled
+    assert "LaunchDebugBrowser" in enabled
+    assert "ListBrowserTabs" in enabled
+    assert "GetBrowserConsoleLogs" in enabled
+    assert "GetBrowserNetworkRequests" in enabled
+    assert "GetBrowserDomText" in enabled
+    assert "ClickDomElement" in enabled
+    assert "SessionNoteAdd" in enabled
+    assert "SessionNoteList" in enabled
+    assert "SessionNoteSummarize" in enabled
+    assert "CreateTerminalSession" in enabled
+    assert "ListTerminalSessions" in enabled
+    assert "ReadTerminalOutput" in enabled
+    assert "SendTerminalInput" in enabled
+    assert "WaitForTerminalOutput" in enabled
+    assert "StopTerminalSession" in enabled
+    assert "GetActionBudgetStatus" in enabled
+    assert "ConfigureActionBudget" in enabled
+    assert "ResetActionBudget" in enabled
+    assert "DetectKnownIssues" in enabled
+    assert "GetAgentCapabilityGuide" in enabled
+    assert "CollectProjectContext" in enabled
+    assert "VSCodeListWindows" in enabled
+    assert "VSCodeGetActiveFile" in enabled
+    assert "VSCodeListOpenFiles" in enabled
+    assert "VSCodeGetDiagnostics" in enabled
+    assert "VSCodeReadProblemsPanel" in enabled
+    assert "VSCodeReadTerminal" in enabled
+    assert "VSCodeOpenFile" in enabled
+    assert "VSCodeRunCommand" in enabled
+    assert "WaitForChange" in enabled
+    assert "ComputerUseStep" in enabled
+    assert "ComputerUseTask" in enabled
+    assert "UndoLastAction" in enabled
+    assert "SaveUISelector" in enabled
+    assert "FindUISelector" in enabled
+    assert "ClickUISelector" in enabled
+    assert "AgentStatusReport" in enabled
+    assert "AppHealthCheck" in enabled
+    assert "ClipboardSafeRead" in enabled
+    assert "ClipboardSafeWrite" in enabled
+    assert "PasteText" in enabled
+    assert "StartFileWatch" in enabled
+    assert "StopFileWatch" in enabled
+    assert "ListFileChanges" in enabled
+    assert "HumanHandoff" in enabled
+    assert "ResumeHumanHandoff" in enabled
+    assert "HandoffStatus" in enabled
+    assert "ListMonitors" in enabled
+    assert "GetActiveWindow" in enabled
+    assert "GetWindowBounds" in enabled
     assert "Shell" not in enabled
     assert "FileWrite" not in enabled
 
@@ -183,3 +349,14 @@ def test_new_ui_tools_are_desktop_category():
     assert TOOL_CATEGORIES["RobloxStudioInspectUI"] == ToolCategory.DESKTOP
     assert TOOL_CATEGORIES["RobloxStudioOpenTab"] == ToolCategory.DESKTOP
     assert TOOL_CATEGORIES["RobloxStudioEnsurePanel"] == ToolCategory.DESKTOP
+    assert TOOL_CATEGORIES["GetActionBudgetStatus"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["ConfigureActionBudget"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["ResetActionBudget"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeListWindows"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeGetActiveFile"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeListOpenFiles"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeGetDiagnostics"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeReadProblemsPanel"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeReadTerminal"] == ToolCategory.QUERY
+    assert TOOL_CATEGORIES["VSCodeOpenFile"] == ToolCategory.SHELL
+    assert TOOL_CATEGORIES["VSCodeRunCommand"] == ToolCategory.SHELL

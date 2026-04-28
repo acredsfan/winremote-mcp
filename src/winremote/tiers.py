@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-VALID_PROFILES = {"default", "chatgpt", "copilot", "excel", "claude"}
+from winremote.profile_loader import list_profile_tomls, load_profile_toml
+
+_BUILTIN_PROFILES = {"default", "chatgpt", "copilot", "excel", "claude"}
+try:
+    _TOML_PROFILES = set(list_profile_tomls())
+except Exception:
+    _TOML_PROFILES = set()
+
+VALID_PROFILES = _BUILTIN_PROFILES | _TOML_PROFILES
 
 TOOL_TIERS = {
     "tier1": {
@@ -14,6 +22,7 @@ TOOL_TIERS = {
         "UIWatch",
         "ObserveScreen",
         "GetClipboard",
+        "ClipboardSafeRead",
         "GetSystemInfo",
         "ListProcesses",
         "FileList",
@@ -27,12 +36,41 @@ TOOL_TIERS = {
         "NetConnections",
         "OCR",
         "ScreenRecord",
+        "ListRecordings",
+        "GetRecordingManifest",
+        "AnalyzeRecording",
+        "RenderSessionReport",
+        "ListBrowserTabs",
+        "GetBrowserConsoleLogs",
+        "GetBrowserNetworkRequests",
+        "GetBrowserDomText",
+        "SessionNoteList",
+        "SessionNoteSummarize",
+        "ListTerminalSessions",
+        "ReadTerminalOutput",
+        "WaitForTerminalOutput",
+        "GetActionBudgetStatus",
+        "DetectKnownIssues",
+        "GetAgentCapabilityGuide",
+        "CollectProjectContext",
+        "VSCodeListWindows",
+        "VSCodeGetActiveFile",
+        "VSCodeListOpenFiles",
+        "VSCodeGetDiagnostics",
+        "VSCodeReadProblemsPanel",
+        "VSCodeReadTerminal",
         "Notification",
         "Wait",
+        "WaitForChange",
         "WaitForRegionText",
         "WaitForImageChange",
         "AssertWindowActive",
         "AssertProcessRunning",
+        "ListMonitors",
+        "GetActiveWindow",
+        "GetWindowBounds",
+        "AgentStatusReport",
+        "AppHealthCheck",
         "TailFile",
         "CaptureFailureBundle",
         "RobloxStudioInspectUI",
@@ -41,13 +79,37 @@ TOOL_TIERS = {
         "RobloxStudioGetTestState",
         "GetTaskStatus",
         "GetRunningTasks",
+        "StartFileWatch",
+        "StopFileWatch",
+        "ListFileChanges",
+        "HumanHandoff",
+        "ResumeHumanHandoff",
+        "HandoffStatus",
     },
     "tier2": {
         "Click",
         "UIClick",
         "UIAct",
         "UISequence",
+        "ComputerUseStep",
+        "ComputerUseTask",
+        "UndoLastAction",
+        "SaveUISelector",
+        "FindUISelector",
+        "ClickUISelector",
+        "LaunchDebugBrowser",
+        "ClickDomElement",
+        "SessionNoteAdd",
+        "CreateTerminalSession",
+        "SendTerminalInput",
+        "StopTerminalSession",
+        "ConfigureActionBudget",
+        "ResetActionBudget",
+        "VSCodeOpenFile",
+        "VSCodeRunCommand",
         "Type",
+        "ClipboardSafeWrite",
+        "PasteText",
         "Move",
         "Scroll",
         "KeyDown",
@@ -71,6 +133,8 @@ TOOL_TIERS = {
         "Scrape",
         "CancelTask",
         "ReconnectSession",
+        "StartScreenRecording",
+        "StopScreenRecording",
     },
     "tier3": {
         "Shell",
@@ -96,12 +160,51 @@ CHATGPT_PROFILE_TOOLS = {
     "UIWatch",
     "UIAct",
     "UISequence",
+    "ComputerUseStep",
+    "ComputerUseTask",
+    "UndoLastAction",
+    "SaveUISelector",
+    "FindUISelector",
+    "ClickUISelector",
     "Snapshot",
     "AnnotatedSnapshot",
     "UIMap",
     "UIMapJson",
     "UIClick",
     "OCR",
+    "ListRecordings",
+    "GetRecordingManifest",
+    "AnalyzeRecording",
+    "RenderSessionReport",
+    "LaunchDebugBrowser",
+    "ListBrowserTabs",
+    "GetBrowserConsoleLogs",
+    "GetBrowserNetworkRequests",
+    "GetBrowserDomText",
+    "ClickDomElement",
+    "SessionNoteAdd",
+    "SessionNoteList",
+    "SessionNoteSummarize",
+    "CreateTerminalSession",
+    "ListTerminalSessions",
+    "ReadTerminalOutput",
+    "SendTerminalInput",
+    "WaitForTerminalOutput",
+    "GetActionBudgetStatus",
+    "DetectKnownIssues",
+    "GetAgentCapabilityGuide",
+    "CollectProjectContext",
+    "VSCodeListWindows",
+    "VSCodeGetActiveFile",
+    "VSCodeListOpenFiles",
+    "VSCodeGetDiagnostics",
+    "VSCodeReadProblemsPanel",
+    "VSCodeReadTerminal",
+    "StopTerminalSession",
+    "ConfigureActionBudget",
+    "ResetActionBudget",
+    "VSCodeOpenFile",
+    "VSCodeRunCommand",
     "Click",
     "Type",
     "Move",
@@ -117,10 +220,18 @@ CHATGPT_PROFILE_TOOLS = {
     "App",
     "Shortcut",
     "Wait",
+    "WaitForChange",
     "WaitForRegionText",
     "WaitForImageChange",
     "AssertWindowActive",
     "AssertProcessRunning",
+    "ListMonitors",
+    "GetActiveWindow",
+    "GetWindowBounds",
+    "AgentStatusReport",
+    "AppHealthCheck",
+    "AgentStatusReport",
+    "AppHealthCheck",
     "TailFile",
     "CaptureFailureBundle",
     "RobloxStudioInspectUI",
@@ -132,6 +243,9 @@ CHATGPT_PROFILE_TOOLS = {
     "FileList",
     "FileSearch",
     "GetClipboard",
+    "ClipboardSafeRead",
+    "ClipboardSafeWrite",
+    "PasteText",
     "SetClipboard",
     "GetSystemInfo",
     "ListProcesses",
@@ -145,6 +259,14 @@ CHATGPT_PROFILE_TOOLS = {
     "RobloxStudioTeleportToCheckpoint",
     "RobloxStudioRunNamedTest",
     "ReconnectSession",
+    "StartScreenRecording",
+    "StopScreenRecording",
+    "StartFileWatch",
+    "StopFileWatch",
+    "ListFileChanges",
+    "HumanHandoff",
+    "ResumeHumanHandoff",
+    "HandoffStatus",
 }
 COPILOT_PROFILE_TOOLS = CHATGPT_PROFILE_TOOLS - {
     "Shell",
@@ -164,11 +286,50 @@ EXCEL_PROFILE_TOOLS = {
     "UIFind",
     "UIWatch",
     "OCR",
+    "ListRecordings",
+    "GetRecordingManifest",
+    "AnalyzeRecording",
+    "RenderSessionReport",
+    "LaunchDebugBrowser",
+    "ListBrowserTabs",
+    "GetBrowserConsoleLogs",
+    "GetBrowserNetworkRequests",
+    "GetBrowserDomText",
+    "ClickDomElement",
+    "SessionNoteAdd",
+    "SessionNoteList",
+    "SessionNoteSummarize",
+    "CreateTerminalSession",
+    "ListTerminalSessions",
+    "ReadTerminalOutput",
+    "SendTerminalInput",
+    "WaitForTerminalOutput",
+    "GetActionBudgetStatus",
+    "DetectKnownIssues",
+    "GetAgentCapabilityGuide",
+    "CollectProjectContext",
+    "VSCodeListWindows",
+    "VSCodeGetActiveFile",
+    "VSCodeListOpenFiles",
+    "VSCodeGetDiagnostics",
+    "VSCodeReadProblemsPanel",
+    "VSCodeReadTerminal",
+    "StopTerminalSession",
+    "ConfigureActionBudget",
+    "ResetActionBudget",
+    "VSCodeOpenFile",
+    "VSCodeRunCommand",
     # UI interaction
     "Click",
     "UIClick",
     "UIAct",
     "UISequence",
+    "ComputerUseStep",
+    "ComputerUseTask",
+    "UndoLastAction",
+    "SaveUISelector",
+    "FindUISelector",
+    "ClickUISelector",
     "Type",
     "Move",
     "Scroll",
@@ -180,6 +341,9 @@ EXCEL_PROFILE_TOOLS = {
     "App",
     # Clipboard (essential for Excel data workflows)
     "GetClipboard",
+    "ClipboardSafeRead",
+    "ClipboardSafeWrite",
+    "PasteText",
     "SetClipboard",
     # File operations (reading/writing data files and running macros)
     "Shell",
@@ -189,10 +353,14 @@ EXCEL_PROFILE_TOOLS = {
     "FileSearch",
     # Waiting and assertions
     "Wait",
+    "WaitForChange",
     "WaitForRegionText",
     "WaitForImageChange",
     "AssertWindowActive",
     "AssertProcessRunning",
+    "ListMonitors",
+    "GetActiveWindow",
+    "GetWindowBounds",
     # System utilities
     "GetSystemInfo",
     "ListProcesses",
@@ -204,8 +372,53 @@ EXCEL_PROFILE_TOOLS = {
     "RobloxStudioOpenTab",
     "RobloxStudioEnsurePanel",
     "ReconnectSession",
+    "StartScreenRecording",
+    "StopScreenRecording",
+    "StartFileWatch",
+    "StopFileWatch",
+    "ListFileChanges",
+    "HumanHandoff",
+    "ResumeHumanHandoff",
+    "HandoffStatus",
 }
 _NAME_LOOKUP = {name.lower(): name for name in ALL_TOOLS}
+
+
+def _resolve_profile_tools(profile_name: str, *, _seen: set[str] | None = None) -> set[str]:
+    """Resolve profile tools from built-ins or TOML profiles (supports extends)."""
+    name = normalize_profile_name(profile_name)
+    if _seen is None:
+        _seen = set()
+    if name in _seen:
+        raise ValueError(f"Profile inheritance cycle detected at: {name}")
+    _seen.add(name)
+
+    if name == "chatgpt":
+        return set(CHATGPT_PROFILE_TOOLS)
+    if name == "copilot":
+        return set(COPILOT_PROFILE_TOOLS)
+    if name == "claude":
+        return set(CLAUDE_PROFILE_TOOLS)
+    if name == "excel":
+        return set(EXCEL_PROFILE_TOOLS)
+    if name == "default":
+        return set(TOOL_TIERS["tier1"]) | set(TOOL_TIERS["tier2"])
+
+    profile_data = load_profile_toml(name)
+    extends_name = str(profile_data.get("extends") or "").strip().lower()
+    if extends_name:
+        enabled = _resolve_profile_tools(extends_name, _seen=_seen)
+    else:
+        enabled = set(TOOL_TIERS["tier1"]) | set(TOOL_TIERS["tier2"])
+
+    enabled_from_file = profile_data.get("enabled_tools") or []
+    disabled_from_file = profile_data.get("disabled_tools") or []
+
+    if enabled_from_file:
+        enabled |= set(normalize_tool_names([str(item) for item in enabled_from_file]))
+    if disabled_from_file:
+        enabled -= set(normalize_tool_names([str(item) for item in disabled_from_file]))
+    return enabled
 
 
 def parse_tool_csv(raw: str | None) -> list[str]:
@@ -255,14 +468,8 @@ def resolve_enabled_tools(
 
     if explicit_tools:
         enabled = set(normalize_tool_names(explicit_tools))
-    elif profile == "chatgpt":
-        enabled = set(CHATGPT_PROFILE_TOOLS)
-    elif profile == "copilot":
-        enabled = set(COPILOT_PROFILE_TOOLS)
-    elif profile == "claude":
-        enabled = set(CLAUDE_PROFILE_TOOLS)
-    elif profile == "excel":
-        enabled = set(EXCEL_PROFILE_TOOLS)
+    elif profile in VALID_PROFILES and profile != "default":
+        enabled = _resolve_profile_tools(profile)
     elif enable_all:
         enabled = set(ALL_TOOLS)
     else:

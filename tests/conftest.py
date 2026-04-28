@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from PIL import Image
@@ -16,6 +18,12 @@ from PIL import Image
 # ---------------------------------------------------------------------------
 
 os.environ.setdefault("DISPLAY", ":0")
+
+# Isolate per-user Windows config paths during tests so local machine state
+# (e.g. launcher settings/startup preferences) cannot affect outcomes.
+_TEST_USER_HOME = Path(tempfile.mkdtemp(prefix="winremote-tests-"))
+os.environ["APPDATA"] = str(_TEST_USER_HOME / "AppData" / "Roaming")
+os.environ["LOCALAPPDATA"] = str(_TEST_USER_HOME / "AppData" / "Local")
 
 # Mock all problematic native modules
 _mock_modules = [
@@ -102,3 +110,15 @@ def _reset_pyautogui(monkeypatch):
     monkeypatch.setattr(desktop, "get_virtual_screen_bounds", MagicMock(return_value=virtual_screen))
     monkeypatch.setattr(desktop, "validate_screen_point", MagicMock(return_value=monitor_info[0]))
     monkeypatch.setattr(desktop, "capture_image", MagicMock(return_value=(dummy_image, {"bounds": virtual_screen, "captured_monitors": [1], "monitors": monitor_info, "virtual_screen": virtual_screen})))
+
+    import winremote.action_budget as action_budget
+
+    action_budget.reset(unpause=True)
+    action_budget.configure(
+        max_clicks_per_minute=20,
+        max_keystrokes_per_minute=2000,
+        max_shell_commands_per_minute=10,
+        max_computer_use_steps=25,
+        pause_on_repeated_failure=True,
+        repeated_failure_threshold=3,
+    )

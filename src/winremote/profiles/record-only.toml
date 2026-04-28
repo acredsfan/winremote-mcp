@@ -1,0 +1,38 @@
+name = "record-only"
+description = "Allow recording and analysis tools without input control."
+
+enabled_tools = [
+  "StartScreenRecording",
+  "StopScreenRecording",
+  "ListRecordings",
+  "GetRecordingManifest",
+  "AnalyzeRecording",
+  "RenderSessionReport",
+  "Snapshot",
+  "AnnotatedSnapshot",
+  "ObserveScreen",
+  "UIMap",
+  "UIMapJson",
+  "UIFind",
+  "UIWatch",
+  "OCR",
+  "Wait",
+  "WaitForChange",
+  "AgentStatusReport",
+  "AppHealthCheck",
+]
+
+disabled_tools = [
+  "Click",
+  "Type",
+  "Move",
+  "Scroll",
+  "Shortcut",
+  "Shell",
+  "FileWrite",
+  "RegWrite",
+  "ServiceStop",
+  "TaskCreate",
+]
+
+require_confirmation = ["StopScreenRecording"]

@@ -1,0 +1,39 @@
+name = "safe-observe-only"
+description = "Observation-only profile with no control actions."
+
+enabled_tools = [
+  "ObserveScreen",
+  "Snapshot",
+  "AnnotatedSnapshot",
+  "UIMap",
+  "UIMapJson",
+  "UIFind",
+  "UIWatch",
+  "OCR",
+  "ListMonitors",
+  "GetActiveWindow",
+  "GetWindowBounds",
+  "ListRecordings",
+  "GetRecordingManifest",
+  "AnalyzeRecording",
+  "RenderSessionReport",
+  "AgentStatusReport",
+  "AppHealthCheck",
+  "Wait",
+  "WaitForChange",
+]
+
+disabled_tools = [
+  "Click",
+  "Type",
+  "Move",
+  "Scroll",
+  "Shortcut",
+  "UIClick",
+  "UIAct",
+  "UISequence",
+  "ComputerUseStep",
+  "ComputerUseTask",
+  "Shell",
+  "FileWrite",
+]

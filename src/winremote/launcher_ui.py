@@ -1428,8 +1428,14 @@ class TrayApp:
         self._root.title("winremote-mcp Launcher")
 
         # Set branded window icon (applies to all Toplevel children too)
-        self._tk_icon = ImageTk.PhotoImage(_make_app_icon())
-        self._root.iconphoto(True, self._tk_icon)  # type: ignore[arg-type]
+        self._tk_icon = None
+        try:
+            self._tk_icon = ImageTk.PhotoImage(_make_app_icon())
+            self._root.iconphoto(True, self._tk_icon)  # type: ignore[arg-type]
+        except Exception:
+            # Headless/test contexts can lack a usable Tk image root.
+            # UI remains functional without a custom icon.
+            self._tk_icon = None
 
         # Cross-thread UI action queue
         self._ui_queue: queue.Queue[tuple[str, ...]] = queue.Queue()

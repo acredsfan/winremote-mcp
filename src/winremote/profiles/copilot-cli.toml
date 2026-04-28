@@ -1,0 +1,8 @@
+name = "copilot-cli"
+description = "Copilot CLI profile with conservative system actions."
+
+extends = "copilot"
+
+enabled_tools = []
+disabled_tools = ["TaskCreate", "ServiceStop", "RegWrite"]
+require_confirmation = ["ComputerUseStep", "ComputerUseTask"]

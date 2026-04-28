@@ -28,11 +28,11 @@ except ImportError:
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 
-from winremote import __version__, desktop, network, ocr, process_mgr, recording, registry, roblox_studio, roblox_studio_harness, services
-from winremote.config import discover_config_path, load_config
+from winremote import __version__, action_budget, action_undo, agent_capabilities, browser_debug, computer_use, desktop, file_watcher, handoff_state, known_issues, network, ocr, process_mgr, project_context, recording, redaction, registry, roblox_studio, roblox_studio_harness, selectors, services, session_notes, session_report, terminal_sessions, vscode_bridge
+from winremote.config import RedactionConfig, discover_config_path, load_config
 from winremote.security import IPAllowlistMiddleware, parse_ip_allowlist
 from winremote.taskmanager import manager as task_manager
-from winremote.tiers import ALL_TOOLS, get_tier_names, parse_tool_csv, resolve_enabled_tools
+from winremote.tiers import ALL_TOOLS, VALID_PROFILES, get_tier_names, parse_tool_csv, resolve_enabled_tools
 
 load_dotenv()
 
@@ -99,6 +99,8 @@ mcp = FastMCP(
     instructions=DEFAULT_SERVER_INSTRUCTIONS,
 )
 
+PROFILE_CHOICES = sorted(VALID_PROFILES)
+
 
 # ---------------------------------------------------------------------------
 # Health endpoint
@@ -128,6 +130,23 @@ def _check_win32(tool_name: str = "This tool") -> str | None:
     return None
 
 
+def _check_handoff_pause(tool_name: str) -> str | None:
+    """Return pause message if human handoff currently pauses action tools."""
+    if handoff_state.is_paused():
+        state = handoff_state.status()
+        reason = state.get("message") or "Awaiting human resume"
+        return f"{tool_name} paused: {reason}"
+    return None
+
+
+def _check_action_budget(action_kind: str, amount: int = 1) -> str | None:
+    """Return an error message when action budget policy blocks execution."""
+    allowed, reason = action_budget.check_and_record(action_kind, amount=amount)
+    if allowed:
+        return None
+    return f"Action blocked by budget policy: {reason}"
+
+
 def _monitor_context() -> dict:
     """Best-effort monitor metadata for tool payloads."""
     try:
@@ -150,13 +169,14 @@ def _ui_coordinate_spaces() -> dict[str, str]:
 
 def _server_instructions_for_profile(profile: str) -> str:
     """Return profile-specific server instructions."""
-    if profile == "chatgpt":
+    normalized = str(profile or "default").strip().lower()
+    if normalized in {"chatgpt", "chatgpt-full"}:
         return CHATGPT_SERVER_INSTRUCTIONS
-    if profile == "claude":
+    if normalized in {"claude", "claude-code"}:
         return CLAUDE_SERVER_INSTRUCTIONS
-    if profile == "copilot":
+    if normalized in {"copilot", "copilot-chat", "copilot-cli", "codex-cli", "gemini-cli", "qwen-code"}:
         return COPILOT_SERVER_INSTRUCTIONS
-    if profile == "excel":
+    if normalized == "excel":
         return EXCEL_SERVER_INSTRUCTIONS
     return DEFAULT_SERVER_INSTRUCTIONS
 
@@ -818,6 +838,12 @@ def Click(
         action: 'click', 'double', or 'hover'.
     """
     try:
+        paused = _check_handoff_pause("Click")
+        if paused:
+            return paused
+        budget_block = _check_action_budget("click", amount=1)
+        if budget_block:
+            return budget_block
         desktop.validate_screen_point(x, y)
         if action == "hover":
             pyautogui.moveTo(x, y)
@@ -856,6 +882,13 @@ def Type(
         press_enter: Press Enter after typing.
     """
     try:
+        paused = _check_handoff_pause("Type")
+        if paused:
+            return paused
+        keystroke_budget = max(1, len(text or ""))
+        budget_block = _check_action_budget("keystroke", amount=keystroke_budget)
+        if budget_block:
+            return budget_block
         if x and y:
             pyautogui.click(x, y)
             time.sleep(0.1)
@@ -979,6 +1012,213 @@ def Wait(seconds: float = 1.0) -> str:
     """
     time.sleep(seconds)
     return f"Waited {seconds}s"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="WaitForChange",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def WaitForChange(
+    watch_for: str = "screen_change",
+    target: str = "",
+    timeout_seconds: float = 30.0,
+    poll_interval_ms: int = 500,
+) -> str:
+    """Wait for a change condition and return evidence.
+
+    Args:
+        watch_for: One of screen_change, window_title, process_start,
+            process_stop, text_appears, text_disappears, file_created,
+            file_modified, terminal_output.
+        target: Condition target (text/process name/path/title fragment).
+        timeout_seconds: Max wait time.
+        poll_interval_ms: Polling interval in milliseconds.
+    """
+    mode = str(watch_for or "screen_change").strip().lower()
+    timeout_seconds = max(0.0, float(timeout_seconds))
+    poll_interval = max(0.05, float(poll_interval_ms) / 1000.0)
+    deadline = time.monotonic() + timeout_seconds
+
+    try:
+        if mode == "screen_change":
+            payload = _wait_for_image_change(
+                timeout_seconds=timeout_seconds,
+                poll_interval=poll_interval,
+                min_change_ratio=0.01,
+                grid_size=6,
+            )
+            payload["watch_for"] = mode
+            payload["target"] = target or None
+            payload["observation"] = _compact_observation_payload(payload.get("observation"))
+            return json.dumps(payload, indent=2)
+
+        if mode == "window_title":
+            err = _check_win32("WaitForChange")
+            if err:
+                return err
+            baseline_hwnd = desktop.win32gui.GetForegroundWindow() if desktop.HAS_WIN32 else 0
+            baseline_title = desktop.win32gui.GetWindowText(baseline_hwnd) if baseline_hwnd else ""
+            target_l = target.strip().lower()
+
+            while True:
+                hwnd = desktop.win32gui.GetForegroundWindow() if desktop.HAS_WIN32 else 0
+                title = desktop.win32gui.GetWindowText(hwnd) if hwnd else ""
+                changed = title != baseline_title
+                matched = (target_l in title.lower()) if target_l else changed
+                if matched:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "satisfied": True,
+                            "timed_out": False,
+                            "target": target or None,
+                            "baseline_title": baseline_title,
+                            "current_title": title,
+                            "current_handle": hwnd,
+                        },
+                        indent=2,
+                    )
+                if time.monotonic() >= deadline:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "satisfied": False,
+                            "timed_out": True,
+                            "target": target or None,
+                            "baseline_title": baseline_title,
+                            "current_title": title,
+                            "current_handle": hwnd,
+                        },
+                        indent=2,
+                    )
+                time.sleep(poll_interval)
+
+        if mode in {"process_start", "process_stop"}:
+            needle = target.strip().lower()
+            if not needle:
+                return "WaitForChange error: target process name is required for process_start/process_stop"
+
+            baseline_count = len(_process_matches(name=needle))
+            while True:
+                count = len(_process_matches(name=needle))
+                satisfied = (count > 0) if mode == "process_start" else (count == 0)
+                if satisfied:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "target": target,
+                            "satisfied": True,
+                            "timed_out": False,
+                            "baseline_count": baseline_count,
+                            "current_count": count,
+                        },
+                        indent=2,
+                    )
+                if time.monotonic() >= deadline:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "target": target,
+                            "satisfied": False,
+                            "timed_out": True,
+                            "baseline_count": baseline_count,
+                            "current_count": count,
+                        },
+                        indent=2,
+                    )
+                time.sleep(poll_interval)
+
+        if mode in {"text_appears", "text_disappears", "terminal_output"}:
+            needle = target.strip().lower()
+            if not needle:
+                return f"WaitForChange error: target text is required for {mode}"
+
+            while True:
+                text = ocr.run_ocr() or ""
+                has_match = needle in text.lower()
+                satisfied = has_match if mode in {"text_appears", "terminal_output"} else not has_match
+                if satisfied:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "target": target,
+                            "satisfied": True,
+                            "timed_out": False,
+                            "matched": has_match,
+                            "text_excerpt": text[:1000],
+                        },
+                        indent=2,
+                    )
+                if time.monotonic() >= deadline:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "target": target,
+                            "satisfied": False,
+                            "timed_out": True,
+                            "matched": has_match,
+                            "text_excerpt": text[:1000],
+                        },
+                        indent=2,
+                    )
+                time.sleep(poll_interval)
+
+        if mode in {"file_created", "file_modified"}:
+            if not target.strip():
+                return f"WaitForChange error: target path is required for {mode}"
+            path = Path(target).expanduser()
+            baseline_exists = path.exists()
+            baseline_mtime = path.stat().st_mtime if baseline_exists else None
+
+            while True:
+                exists = path.exists()
+                mtime = path.stat().st_mtime if exists else None
+                satisfied = False
+                if mode == "file_created":
+                    satisfied = exists
+                elif mode == "file_modified":
+                    satisfied = exists and baseline_mtime is not None and mtime is not None and mtime > baseline_mtime
+
+                if satisfied:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "target": str(path),
+                            "satisfied": True,
+                            "timed_out": False,
+                            "baseline_exists": baseline_exists,
+                            "exists": exists,
+                            "baseline_mtime": baseline_mtime,
+                            "mtime": mtime,
+                        },
+                        indent=2,
+                    )
+                if time.monotonic() >= deadline:
+                    return json.dumps(
+                        {
+                            "watch_for": mode,
+                            "target": str(path),
+                            "satisfied": False,
+                            "timed_out": True,
+                            "baseline_exists": baseline_exists,
+                            "exists": exists,
+                            "baseline_mtime": baseline_mtime,
+                            "mtime": mtime,
+                        },
+                        indent=2,
+                    )
+                time.sleep(poll_interval)
+
+        return (
+            "WaitForChange error: watch_for must be one of "
+            "screen_change, window_title, process_start, process_stop, text_appears, "
+            "text_disappears, file_created, file_modified, terminal_output"
+        )
+    except Exception as e:
+        return f"WaitForChange error: {e}"
 
 
 @mcp.tool(
@@ -1249,6 +1489,247 @@ def AssertProcessRunning(name: str = "", pid: int = 0) -> str:
         )
     except Exception as e:
         return f"AssertProcessRunning error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="AppHealthCheck",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def AppHealthCheck(process_name: str = "", window_title: str = "") -> str:
+    """Check if an app is running, visible, active, and responsive."""
+    try:
+        process_query = process_name.strip()
+        title_query = window_title.strip().lower()
+
+        process_matches = _process_matches(name=process_query) if process_query else []
+        windows = desktop.enumerate_windows() if desktop.HAS_WIN32 else []
+        matching_windows = [w for w in windows if title_query in w.title.lower()] if title_query else []
+
+        active_hwnd = desktop.win32gui.GetForegroundWindow() if desktop.HAS_WIN32 else 0
+        active_title = desktop.win32gui.GetWindowText(active_hwnd) if desktop.HAS_WIN32 and active_hwnd else ""
+
+        responsive = True
+        if desktop.HAS_WIN32:
+            try:
+                import ctypes
+
+                for w in matching_windows[:1]:
+                    if hasattr(ctypes.windll.user32, "IsHungAppWindow"):
+                        responsive = not bool(ctypes.windll.user32.IsHungAppWindow(int(w.handle)))
+            except Exception:
+                responsive = True
+
+        app_window = matching_windows[0] if matching_windows else None
+        running = bool(process_matches) if process_query else bool(matching_windows)
+        active = bool(active_title and ((title_query and title_query in active_title.lower()) or (app_window and app_window.handle == active_hwnd)))
+
+        payload = {
+            "running": running,
+            "responsive": responsive,
+            "visible": bool(app_window.visible) if app_window else False,
+            "active": active,
+            "process_name": process_query or (process_matches[0]["name"] if process_matches else None),
+            "pid": process_matches[0]["pid"] if process_matches else (app_window.pid if app_window else None),
+            "window_title": app_window.title if app_window else None,
+            "window_handle": app_window.handle if app_window else None,
+            "reason": (
+                "No matching process or window found"
+                if not running
+                else "App appears healthy" if responsive else "App window may be unresponsive"
+            ),
+        }
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"AppHealthCheck error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ListMonitors",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ListMonitors() -> str:
+    """List monitor metadata and virtual-screen layout."""
+    try:
+        monitors = desktop.get_monitor_info()
+        return json.dumps(
+            {
+                "count": len(monitors),
+                "monitors": monitors,
+                "virtual_screen": desktop.get_virtual_screen_bounds(monitors),
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"ListMonitors error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetActiveWindow",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetActiveWindow() -> str:
+    """Get active foreground window metadata."""
+    err = _check_win32("GetActiveWindow")
+    if err:
+        return err
+    try:
+        hwnd = desktop.win32gui.GetForegroundWindow()
+        title = desktop.win32gui.GetWindowText(hwnd) if hwnd else ""
+        windows = desktop.enumerate_windows()
+        active = next((w for w in windows if w.handle == hwnd), None)
+        if active is None:
+            return json.dumps({"handle": hwnd, "title": title, "found": False}, indent=2)
+        return json.dumps(
+            {
+                "found": True,
+                "handle": active.handle,
+                "title": active.title,
+                "pid": active.pid,
+                "process_name": active.process_name,
+                "monitor_id": active.monitor_id,
+                "rect": {
+                    "left": active.rect[0],
+                    "top": active.rect[1],
+                    "right": active.rect[2],
+                    "bottom": active.rect[3],
+                },
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"GetActiveWindow error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetWindowBounds",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetWindowBounds(window_id: str) -> str:
+    """Get window bounds by id format hwnd:<number> or raw integer string."""
+    err = _check_win32("GetWindowBounds")
+    if err:
+        return err
+    try:
+        raw = window_id.strip()
+        if raw.lower().startswith("hwnd:"):
+            raw = raw.split(":", 1)[1].strip()
+        hwnd = int(raw)
+        rect = desktop.win32gui.GetWindowRect(hwnd)
+        return json.dumps(
+            {
+                "window_id": f"hwnd:{hwnd}",
+                "rect": {
+                    "left": rect[0],
+                    "top": rect[1],
+                    "right": rect[2],
+                    "bottom": rect[3],
+                    "width": max(0, rect[2] - rect[0]),
+                    "height": max(0, rect[3] - rect[1]),
+                },
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"GetWindowBounds error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="AgentStatusReport",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def AgentStatusReport(
+    include_windows: bool | str = True,
+    include_recent_actions: bool | str = True,
+    include_errors: bool | str = True,
+    include_recommended_next_tool: bool | str = True,
+) -> str:
+    """Return a concise snapshot of current desktop/agent state."""
+    try:
+        windows = desktop.enumerate_windows() if desktop.HAS_WIN32 else []
+        active_hwnd = desktop.win32gui.GetForegroundWindow() if desktop.HAS_WIN32 else 0
+        active_window = next((w for w in windows if w.handle == active_hwnd), None)
+
+        running_tasks = task_manager.list_tasks("running")
+        pending_tasks = task_manager.list_tasks("pending")
+        active_recordings = recording.list_active_recordings()
+
+        errors: list[str] = []
+        if _tobool(include_errors):
+            if active_window and "not responding" in (active_window.title or "").lower():
+                errors.append("Active window title indicates potential unresponsive app")
+            if not active_window:
+                errors.append("No active foreground window detected")
+
+        recommended_next_tool = None
+        if _tobool(include_recommended_next_tool):
+            if running_tasks:
+                recommended_next_tool = "WaitForChange"
+            elif active_recordings:
+                recommended_next_tool = "StopScreenRecording"
+            elif errors:
+                recommended_next_tool = "CaptureFailureBundle"
+            else:
+                recommended_next_tool = "ObserveScreen"
+
+        payload: dict[str, Any] = {
+            "active_window": (
+                {
+                    "handle": active_window.handle,
+                    "title": active_window.title,
+                    "pid": active_window.pid,
+                    "process_name": active_window.process_name,
+                    "monitor_id": active_window.monitor_id,
+                    "rect": {
+                        "left": active_window.rect[0],
+                        "top": active_window.rect[1],
+                        "right": active_window.rect[2],
+                        "bottom": active_window.rect[3],
+                    },
+                }
+                if active_window
+                else None
+            ),
+            "recording_active": bool(active_recordings),
+            "active_recordings": active_recordings,
+            "running_tasks": running_tasks,
+            "pending_tasks": pending_tasks,
+            "errors": errors,
+            "recommended_next_tool": recommended_next_tool,
+        }
+
+        if _tobool(include_windows):
+            payload["windows"] = [
+                {
+                    "handle": w.handle,
+                    "title": w.title,
+                    "pid": w.pid,
+                    "process_name": w.process_name,
+                    "monitor_id": w.monitor_id,
+                }
+                for w in windows[:30]
+            ]
+
+        if _tobool(include_recent_actions):
+            payload["recent_tasks"] = task_manager.list_tasks()[:10]
+
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"AgentStatusReport error: {e}"
 
 
 @mcp.tool(
@@ -1828,6 +2309,9 @@ def Shell(command: str, timeout: int = 30, cwd: str = "") -> str:
         cwd: Working directory. If provided, the command runs inside that directory.
     """
     try:
+        budget_block = _check_action_budget("shell", amount=1)
+        if budget_block:
+            return budget_block
         if cwd:
             command = f"cd {cwd}; {command}"
         result = subprocess.run(
@@ -1836,6 +2320,10 @@ def Shell(command: str, timeout: int = 30, cwd: str = "") -> str:
             text=True,
             timeout=timeout,
         )
+        if result.returncode == 0:
+            action_budget.record_success("shell")
+        else:
+            action_budget.record_failure("shell")
         output = result.stdout
         if result.stderr:
             output += f"\n[STDERR] {result.stderr}"
@@ -1843,8 +2331,10 @@ def Shell(command: str, timeout: int = 30, cwd: str = "") -> str:
             output += f"\n[Exit code: {result.returncode}]"
         return output.strip() or "(no output)"
     except subprocess.TimeoutExpired:
+        action_budget.record_failure("shell")
         return f"Command timed out after {timeout}s"
     except Exception as e:
+        action_budget.record_failure("shell")
         return f"Shell error: {e}"
 
 
@@ -1886,6 +2376,962 @@ def SetClipboard(text: str) -> str:
         return desktop.set_clipboard(text)
     except Exception as e:
         return f"SetClipboard error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ClipboardSafeRead",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ClipboardSafeRead(redact_secrets: bool | str = True) -> str:
+    """Read clipboard text with optional secret redaction."""
+    err = _check_win32("ClipboardSafeRead")
+    if err:
+        return err
+    try:
+        text = desktop.get_clipboard()
+        if not isinstance(text, str):
+            text = str(text)
+        if _tobool(redact_secrets):
+            text = redaction.redact_text(text, RedactionConfig().patterns)
+        return json.dumps(
+            {
+                "success": True,
+                "length": len(text),
+                "redacted": _tobool(redact_secrets),
+                "text": text,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"ClipboardSafeRead error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ClipboardSafeWrite",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ClipboardSafeWrite(
+    text: str,
+    confirm_if_sensitive: bool | str = False,
+    redact_in_logs: bool | str = True,
+) -> str:
+    """Write clipboard text with optional sensitivity confirmation."""
+    err = _check_win32("ClipboardSafeWrite")
+    if err:
+        return err
+    try:
+        patterns = RedactionConfig().patterns
+        redacted = redaction.redact_text(text, patterns)
+        sensitive = redacted != text
+        if sensitive and _tobool(confirm_if_sensitive):
+            return json.dumps(
+                {
+                    "success": False,
+                    "blocked": True,
+                    "reason": "Sensitive-looking text detected; set confirm_if_sensitive=false or provide approved content.",
+                },
+                indent=2,
+            )
+
+        previous_clipboard = desktop.get_clipboard()
+        write_text = text
+        desktop.set_clipboard(write_text)
+        action_undo.set_last_action(
+            {
+                "type": "clipboard_overwrite",
+                "previous_clipboard": previous_clipboard,
+                "new_length": len(write_text),
+            }
+        )
+        payload_text = redacted if _tobool(redact_in_logs) else write_text
+        return json.dumps(
+            {
+                "success": True,
+                "sensitive": sensitive,
+                "length": len(write_text),
+                "logged_text": payload_text,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"ClipboardSafeWrite error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="PasteText",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def PasteText(
+    text: str,
+    target_window: str = "",
+    restore_clipboard: bool | str = True,
+) -> str:
+    """Paste text via clipboard, optionally restoring prior clipboard value."""
+    err = _check_win32("PasteText")
+    if err:
+        return err
+    paused = _check_handoff_pause("PasteText")
+    if paused:
+        return paused
+    try:
+        previous = desktop.get_clipboard()
+        if target_window.strip():
+            desktop.focus_window(title=target_window.strip())
+            time.sleep(0.1)
+
+        desktop.set_clipboard(text)
+        action_undo.set_last_action(
+            {
+                "type": "clipboard_overwrite",
+                "previous_clipboard": previous,
+                "new_length": len(text),
+            }
+        )
+        pyautogui.hotkey("ctrl", "v")
+
+        restored = False
+        if _tobool(restore_clipboard):
+            desktop.set_clipboard(previous)
+            restored = True
+
+        return json.dumps(
+            {
+                "success": True,
+                "pasted_length": len(text),
+                "restore_clipboard": _tobool(restore_clipboard),
+                "restored": restored,
+                "target_window": target_window.strip() or None,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"PasteText error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="UndoLastAction",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def UndoLastAction(strategy: str = "auto") -> str:
+    """Attempt to undo the most recent reversible action."""
+    try:
+        payload = action_undo.undo_last_action(strategy=strategy)
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"UndoLastAction error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="HumanHandoff",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def HumanHandoff(
+    message: str,
+    pause_input_tools: bool | str = True,
+    show_notification: bool | str = True,
+    resume_trigger: str = "manual",
+    timeout_seconds: float = 0.0,
+) -> str:
+    """Pause action tools and hand control to a human."""
+    try:
+        timeout = float(timeout_seconds)
+        state = handoff_state.request_handoff(
+            message=message,
+            pause_input_tools=_tobool(pause_input_tools),
+            resume_trigger=resume_trigger,
+            timeout_seconds=timeout if timeout > 0 else None,
+        )
+        if _tobool(show_notification):
+            try:
+                desktop.show_notification("WinRemote Human Handoff", message)
+            except Exception:
+                pass
+        return json.dumps(
+            {
+                "success": True,
+                "pause_input_tools": _tobool(pause_input_tools),
+                "resume_trigger": resume_trigger,
+                "timeout_seconds": timeout if timeout > 0 else None,
+                "state": state,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"HumanHandoff error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ResumeHumanHandoff",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ResumeHumanHandoff() -> str:
+    """Resume action tools after a handoff pause."""
+    try:
+        state = handoff_state.resume_handoff()
+        return json.dumps({"success": True, "state": state}, indent=2)
+    except Exception as e:
+        return f"ResumeHumanHandoff error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="HandoffStatus",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def HandoffStatus() -> str:
+    """Get current human-handoff pause status."""
+    try:
+        return json.dumps(handoff_state.status(), indent=2)
+    except Exception as e:
+        return f"HandoffStatus error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="RenderSessionReport",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def RenderSessionReport(session_id: str) -> str:
+    """Render a local HTML report for a recorded session trace."""
+    try:
+        return json.dumps(session_report.render_session_report(session_id), indent=2)
+    except Exception as e:
+        return f"RenderSessionReport error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="LaunchDebugBrowser",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def LaunchDebugBrowser(
+    browser: str = "edge",
+    url: str = "",
+    user_data_dir: str = "",
+    remote_debugging_port: int = 9222,
+) -> str:
+    """Launch Edge/Chrome with remote debugging enabled."""
+    try:
+        payload = browser_debug.launch_debug_browser(
+            browser=browser,
+            url=url or None,
+            user_data_dir=user_data_dir or None,
+            remote_debugging_port=remote_debugging_port,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"LaunchDebugBrowser error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ListBrowserTabs",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ListBrowserTabs(session_id: str) -> str:
+    """List tabs for a launched browser debug session."""
+    try:
+        return json.dumps(browser_debug.list_browser_tabs(session_id), indent=2)
+    except Exception as e:
+        return f"ListBrowserTabs error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetBrowserConsoleLogs",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetBrowserConsoleLogs(session_id: str, tab_id: str, level: str = "") -> str:
+    """Get browser console logs for a tab (structured MVP output)."""
+    try:
+        return json.dumps(browser_debug.get_browser_console_logs(session_id, tab_id, level or None), indent=2)
+    except Exception as e:
+        return f"GetBrowserConsoleLogs error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetBrowserNetworkRequests",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetBrowserNetworkRequests(session_id: str, tab_id: str) -> str:
+    """Get browser network requests for a tab (structured MVP output)."""
+    try:
+        return json.dumps(browser_debug.get_browser_network_requests(session_id, tab_id), indent=2)
+    except Exception as e:
+        return f"GetBrowserNetworkRequests error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetBrowserDomText",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetBrowserDomText(session_id: str, tab_id: str) -> str:
+    """Get visible DOM/page text for a tab (best-effort)."""
+    try:
+        return json.dumps(browser_debug.get_browser_dom_text(session_id, tab_id), indent=2)
+    except Exception as e:
+        return f"GetBrowserDomText error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ClickDomElement",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ClickDomElement(session_id: str, tab_id: str, selector: str) -> str:
+    """Click a DOM element by selector (structured MVP output)."""
+    try:
+        paused = _check_handoff_pause("ClickDomElement")
+        if paused:
+            return paused
+        return json.dumps(browser_debug.click_dom_element(session_id, tab_id, selector), indent=2)
+    except Exception as e:
+        return f"ClickDomElement error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="SessionNoteAdd",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def SessionNoteAdd(note: str, tags_csv: str = "", session_id: str = "default") -> str:
+    """Add a local session note with optional tags."""
+    try:
+        tags = [item.strip() for item in str(tags_csv or "").split(",") if item.strip()]
+        return json.dumps(session_notes.add_session_note(note, tags=tags, session_id=session_id), indent=2)
+    except Exception as e:
+        return f"SessionNoteAdd error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="SessionNoteList",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def SessionNoteList(tags_csv: str = "", session_id: str = "default") -> str:
+    """List local session notes, optionally filtered by tags."""
+    try:
+        tags = [item.strip() for item in str(tags_csv or "").split(",") if item.strip()]
+        return json.dumps(session_notes.list_session_notes(tags=tags, session_id=session_id), indent=2)
+    except Exception as e:
+        return f"SessionNoteList error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="SessionNoteSummarize",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def SessionNoteSummarize(session_id: str = "default") -> str:
+    """Summarize local session notes for the given session id."""
+    try:
+        return json.dumps(session_notes.summarize_session_notes(session_id=session_id), indent=2)
+    except Exception as e:
+        return f"SessionNoteSummarize error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="CreateTerminalSession",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def CreateTerminalSession(shell: str = "powershell", cwd: str = "", env_json: str = "") -> str:
+    """Create a controlled terminal session owned by WinRemote."""
+    try:
+        budget_block = _check_action_budget("shell", amount=1)
+        if budget_block:
+            return budget_block
+        env_payload: dict[str, str] | None = None
+        if env_json.strip():
+            parsed = json.loads(env_json)
+            if not isinstance(parsed, dict):
+                return "CreateTerminalSession error: env_json must decode to an object"
+            env_payload = {str(k): str(v) for k, v in parsed.items()}
+        payload = terminal_sessions.create_terminal_session(
+            shell=shell,
+            cwd=cwd.strip() or None,
+            env=env_payload,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"CreateTerminalSession error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ListTerminalSessions",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ListTerminalSessions() -> str:
+    """List controlled terminal sessions."""
+    try:
+        return json.dumps(terminal_sessions.list_terminal_sessions(), indent=2)
+    except Exception as e:
+        return f"ListTerminalSessions error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ReadTerminalOutput",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ReadTerminalOutput(terminal_id: str, lines: int = 200) -> str:
+    """Read recent buffered output from a controlled terminal session."""
+    try:
+        return json.dumps(terminal_sessions.read_terminal_output(terminal_id, lines=lines), indent=2)
+    except Exception as e:
+        return f"ReadTerminalOutput error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="SendTerminalInput",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def SendTerminalInput(terminal_id: str, text: str, press_enter: bool | str = True) -> str:
+    """Send text input to a controlled terminal session."""
+    try:
+        paused = _check_handoff_pause("SendTerminalInput")
+        if paused:
+            return paused
+        keystroke_budget = max(1, len(text or ""))
+        budget_block = _check_action_budget("keystroke", amount=keystroke_budget)
+        if budget_block:
+            return budget_block
+        payload = terminal_sessions.send_terminal_input(terminal_id, text, press_enter=_tobool(press_enter))
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"SendTerminalInput error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="WaitForTerminalOutput",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def WaitForTerminalOutput(
+    terminal_id: str,
+    expected_text: str,
+    timeout_seconds: float = 60.0,
+    poll_interval: float = 0.25,
+) -> str:
+    """Wait until expected text appears in controlled terminal output."""
+    try:
+        payload = terminal_sessions.wait_for_terminal_output(
+            terminal_id,
+            expected_text=expected_text,
+            timeout_seconds=timeout_seconds,
+            poll_interval=poll_interval,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"WaitForTerminalOutput error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="StopTerminalSession",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def StopTerminalSession(terminal_id: str, force: bool | str = False) -> str:
+    """Stop a controlled terminal session."""
+    try:
+        paused = _check_handoff_pause("StopTerminalSession")
+        if paused:
+            return paused
+        payload = terminal_sessions.stop_terminal_session(terminal_id, force=_tobool(force))
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"StopTerminalSession error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetActionBudgetStatus",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetActionBudgetStatus() -> str:
+    """Return current action-budget policy and recent counter state."""
+    try:
+        return json.dumps(action_budget.status(), indent=2)
+    except Exception as e:
+        return f"GetActionBudgetStatus error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ConfigureActionBudget",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ConfigureActionBudget(
+    max_clicks_per_minute: int = 20,
+    max_keystrokes_per_minute: int = 2000,
+    max_shell_commands_per_minute: int = 10,
+    max_computer_use_steps: int = 25,
+    pause_on_repeated_failure: bool | str = True,
+    repeated_failure_threshold: int = 3,
+) -> str:
+    """Configure runtime limits for automation action budgets."""
+    try:
+        payload = action_budget.configure(
+            max_clicks_per_minute=max_clicks_per_minute,
+            max_keystrokes_per_minute=max_keystrokes_per_minute,
+            max_shell_commands_per_minute=max_shell_commands_per_minute,
+            max_computer_use_steps=max_computer_use_steps,
+            pause_on_repeated_failure=_tobool(pause_on_repeated_failure),
+            repeated_failure_threshold=repeated_failure_threshold,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"ConfigureActionBudget error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ResetActionBudget",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ResetActionBudget(unpause: bool | str = True) -> str:
+    """Reset counters and optionally clear paused state."""
+    try:
+        return json.dumps(action_budget.reset(unpause=_tobool(unpause)), indent=2)
+    except Exception as e:
+        return f"ResetActionBudget error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="DetectKnownIssues",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def DetectKnownIssues(
+    target_app: str = "",
+    include_screenshot_analysis: bool | str = True,
+    include_terminal_analysis: bool | str = True,
+    include_browser_analysis: bool | str = True,
+) -> str:
+    """Detect common blocked states and suggest safe next debugging steps."""
+    try:
+        active_title = ""
+        if desktop.HAS_WIN32:
+            hwnd = desktop.win32gui.GetForegroundWindow()
+            active_title = desktop.win32gui.GetWindowText(hwnd) if hwnd else ""
+
+        ocr_text = ""
+        if _tobool(include_screenshot_analysis):
+            try:
+                ocr_text = ocr.run_ocr()[:4000]
+            except Exception:
+                ocr_text = ""
+
+        terminal_text = ""
+        if _tobool(include_terminal_analysis):
+            sessions = terminal_sessions.list_terminal_sessions()
+            if sessions:
+                latest = sessions[0]
+                try:
+                    terminal_payload = terminal_sessions.read_terminal_output(latest["terminal_id"], lines=300)
+                    terminal_text = str(terminal_payload.get("output") or "")
+                except Exception:
+                    terminal_text = ""
+
+        browser_console_text = ""
+        browser_network_text = ""
+        if _tobool(include_browser_analysis):
+            browser_console_text = "browser diagnostics unavailable in MVP"
+            browser_network_text = "browser diagnostics unavailable in MVP"
+
+        payload = known_issues.detect_known_issues(
+            active_window_title=f"{target_app} {active_title}".strip(),
+            terminal_output=terminal_text,
+            ocr_text=ocr_text,
+            browser_console_text=browser_console_text,
+            browser_network_text=browser_network_text,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"DetectKnownIssues error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetAgentCapabilityGuide",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetAgentCapabilityGuide(client_name: str = "") -> str:
+    """Return recommended WinRemote tool usage guidance for a client agent."""
+    try:
+        payload = agent_capabilities.get_agent_capability_guide(client_name or None)
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"GetAgentCapabilityGuide error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="CollectProjectContext",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def CollectProjectContext(
+    root: str,
+    max_files: int = 200,
+    include_git_status: bool | str = True,
+    include_package_scripts: bool | str = True,
+    include_recent_errors: bool | str = True,
+) -> str:
+    """Collect local project context: files, git status, scripts, and recent errors."""
+    try:
+        payload = project_context.collect_project_context(
+            root=root,
+            max_files=max_files,
+            include_git_status=_tobool(include_git_status),
+            include_package_scripts=_tobool(include_package_scripts),
+            include_recent_errors=_tobool(include_recent_errors),
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"CollectProjectContext error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeListWindows",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def VSCodeListWindows() -> str:
+    """List visible VS Code windows with bounds and process metadata."""
+    try:
+        payload = {
+            "windows": vscode_bridge.list_vscode_windows(),
+        }
+        payload["count"] = len(payload["windows"])
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"VSCodeListWindows error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeGetActiveFile",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def VSCodeGetActiveFile() -> str:
+    """Get best-effort active VS Code file info without requiring an extension."""
+    try:
+        return json.dumps(vscode_bridge.get_active_file(), indent=2)
+    except Exception as e:
+        return f"VSCodeGetActiveFile error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeListOpenFiles",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def VSCodeListOpenFiles() -> str:
+    """List best-effort open files from VS Code window titles."""
+    try:
+        return json.dumps(vscode_bridge.list_open_files(), indent=2)
+    except Exception as e:
+        return f"VSCodeListOpenFiles error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeGetDiagnostics",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def VSCodeGetDiagnostics() -> str:
+    """Get best-effort VS Code diagnostics (MVP via Problems panel OCR parsing)."""
+    try:
+        return json.dumps(vscode_bridge.get_diagnostics(), indent=2)
+    except Exception as e:
+        return f"VSCodeGetDiagnostics error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeReadProblemsPanel",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def VSCodeReadProblemsPanel(lines: int = 200) -> str:
+    """Read best-effort Problems panel content using local OCR parsing."""
+    try:
+        return json.dumps(vscode_bridge.read_problems_panel(max_lines=lines), indent=2)
+    except Exception as e:
+        return f"VSCodeReadProblemsPanel error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeReadTerminal",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def VSCodeReadTerminal(lines: int = 200) -> str:
+    """Read VS Code terminal output (controlled sessions first, OCR fallback)."""
+    try:
+        return json.dumps(vscode_bridge.read_terminal(lines=lines), indent=2)
+    except Exception as e:
+        return f"VSCodeReadTerminal error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeOpenFile",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def VSCodeOpenFile(path: str, line: int = 0) -> str:
+    """Open a file in VS Code via CLI using --reuse-window and optional --goto."""
+    try:
+        budget_block = _check_action_budget("shell", amount=1)
+        if budget_block:
+            return budget_block
+        payload = vscode_bridge.open_file(path, line=(line if line > 0 else None))
+        if payload.get("exit_code") == 0:
+            action_budget.record_success("shell")
+        elif payload.get("supported"):
+            action_budget.record_failure("shell")
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        action_budget.record_failure("shell")
+        return f"VSCodeOpenFile error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="VSCodeRunCommand",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def VSCodeRunCommand(command_id: str) -> str:
+    """Run a VS Code command id via CLI (best-effort, profile/policy-governed)."""
+    try:
+        budget_block = _check_action_budget("shell", amount=1)
+        if budget_block:
+            return budget_block
+        payload = vscode_bridge.run_command(command_id)
+        if payload.get("exit_code") == 0:
+            action_budget.record_success("shell")
+        elif payload.get("supported"):
+            action_budget.record_failure("shell")
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        action_budget.record_failure("shell")
+        return f"VSCodeRunCommand error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="SaveUISelector",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def SaveUISelector(
+    name: str,
+    query: str = "",
+    window_title: str = "",
+    match_mode: str = "auto",
+    selector_json: str = "",
+) -> str:
+    """Save a reusable UI selector by name."""
+    try:
+        if selector_json.strip():
+            selector = json.loads(selector_json)
+            if not isinstance(selector, dict):
+                return "SaveUISelector error: selector_json must decode to an object"
+        else:
+            selector = {
+                "query": query,
+                "window_title": window_title,
+                "match_mode": match_mode,
+            }
+        return json.dumps(selectors.save_ui_selector(name, selector), indent=2)
+    except Exception as e:
+        return f"SaveUISelector error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="FindUISelector",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def FindUISelector(name: str, max_results: int = 1, include_text: bool | str = True) -> str:
+    """Resolve a saved selector into current UI matches."""
+    err = _check_win32("FindUISelector")
+    if err:
+        return err
+    try:
+        payload = selectors.find_ui_selector(
+            name=name,
+            max_results=max_results,
+            include_text=_tobool(include_text),
+        )
+        payload["coordinate_spaces"] = _ui_coordinate_spaces()
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"FindUISelector error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ClickUISelector",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ClickUISelector(name: str, button: str = "left") -> str:
+    """Click the best current match for a saved selector."""
+    err = _check_win32("ClickUISelector")
+    if err:
+        return err
+    paused = _check_handoff_pause("ClickUISelector")
+    if paused:
+        return paused
+    try:
+        payload = selectors.click_ui_selector(name=name, button=button)
+        payload["coordinate_spaces"] = _ui_coordinate_spaces()
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"ClickUISelector error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="StartFileWatch",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def StartFileWatch(root: str, recursive: bool | str = True, ignore_patterns_csv: str = "") -> str:
+    """Start watching a directory for file changes (polling-based)."""
+    try:
+        patterns = [item.strip() for item in ignore_patterns_csv.split(",") if item.strip()]
+        payload = file_watcher.start_file_watch(
+            root,
+            recursive=_tobool(recursive),
+            ignore_patterns=patterns,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"StartFileWatch error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="StopFileWatch",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def StopFileWatch(watch_id: str) -> str:
+    """Stop a running file watcher by watch id."""
+    try:
+        return json.dumps(file_watcher.stop_file_watch(watch_id), indent=2)
+    except Exception as e:
+        return f"StopFileWatch error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ListFileChanges",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ListFileChanges(watch_id: str = "", since_seconds: int = 0) -> str:
+    """List file changes detected by active watcher(s)."""
+    try:
+        payload = file_watcher.list_file_changes(
+            watch_id=watch_id.strip() or None,
+            since_seconds=since_seconds if since_seconds > 0 else None,
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"ListFileChanges error: {e}"
 
 
 @mcp.tool(
@@ -2647,6 +4093,170 @@ def ScreenRecord(
         return [TextContent(type="text", text=f"ScreenRecord error: {e}")]
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="StartScreenRecording",
+        readOnlyHint=False,
+        openWorldHint=False,
+    )
+)
+def StartScreenRecording(
+    target: str = "monitor",
+    left: int = 0,
+    top: int = 0,
+    right: int = 0,
+    bottom: int = 0,
+    fps: int = 5,
+    max_width: int = 800,
+    max_duration_seconds: float = 30.0,
+    redact_secrets: bool | str = True,
+) -> str:
+    """Start a stateful screen recording session.
+
+    Args:
+        target: Capture target mode (monitor/window/region/all_monitors). Current
+            phase supports monitor/full-screen and explicit region.
+        left/top/right/bottom: Optional region bounds when target is region.
+        fps: Capture fps (1-10).
+        max_width: Max output width used by GIF backend.
+        max_duration_seconds: Max bounded duration recorded on stop.
+        redact_secrets: Whether to mark this recording as redaction-enabled.
+    """
+    try:
+        region = {}
+        normalized_target = str(target or "monitor").strip().lower()
+        if normalized_target == "region" or left or top or right or bottom:
+            left, top, right, bottom = desktop.normalize_region(left, top, right, bottom)
+            region = {"left": left, "top": top, "right": right, "bottom": bottom}
+
+        handle = recording.start_recording(
+            target=normalized_target,
+            fps=fps,
+            max_width=max_width,
+            max_duration_seconds=max_duration_seconds,
+            redact_secrets=_tobool(redact_secrets),
+            **region,
+        )
+        return json.dumps(
+            {
+                "recording_id": handle.recording_id,
+                "target": handle.target,
+                "started_at": handle.started_at,
+                "max_duration_seconds": handle.max_duration_seconds,
+                "fps": handle.fps,
+                "max_width": handle.max_width,
+                "region": {
+                    "left": handle.left,
+                    "top": handle.top,
+                    "right": handle.right,
+                    "bottom": handle.bottom,
+                },
+                "redact_secrets": handle.redact_secrets,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"StartScreenRecording error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="StopScreenRecording",
+        readOnlyHint=False,
+        openWorldHint=False,
+    )
+)
+def StopScreenRecording(recording_id: str, save_format: str = "mp4") -> str:
+    """Stop a stateful recording and persist artifact + manifest.
+
+    Args:
+        recording_id: Recording id returned by StartScreenRecording.
+        save_format: Requested output format (mp4/webm/gif/frames).
+    """
+    try:
+        result = recording.stop_recording(recording_id, save_format=save_format)
+        return json.dumps(
+            {
+                "recording_id": result.recording_id,
+                "success": result.success,
+                "started_at": result.started_at,
+                "ended_at": result.ended_at,
+                "duration_seconds": result.duration_seconds,
+                "output_path": result.output_path,
+                "output_format": result.output_format,
+                "manifest_path": result.manifest_path,
+                "note": result.note,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return f"StopScreenRecording error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ListRecordings",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def ListRecordings() -> str:
+    """List recordings available in local recording storage."""
+    try:
+        return json.dumps(recording.list_recordings(), indent=2)
+    except Exception as e:
+        return f"ListRecordings error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="GetRecordingManifest",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def GetRecordingManifest(recording_id: str) -> str:
+    """Return manifest details for a recording id."""
+    try:
+        return json.dumps(recording.get_recording_manifest(recording_id), indent=2)
+    except Exception as e:
+        return f"GetRecordingManifest error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="AnalyzeRecording",
+        readOnlyHint=True,
+        openWorldHint=False,
+    )
+)
+def AnalyzeRecording(
+    recording_id: str,
+    question: str = "",
+    extract_keyframes: bool | str = True,
+    keyframe_interval_seconds: float = 2.0,
+    include_ocr: bool | str = True,
+    include_ui_context: bool | str = True,
+    include_event_timeline: bool | str = True,
+    output_format: str = "debug_report",
+) -> str:
+    """Analyze a recording and produce a local-first structured report."""
+    try:
+        payload = recording.analyze_recording(
+            recording_id=recording_id,
+            question=question or None,
+            extract_keyframes=_tobool(extract_keyframes),
+            keyframe_interval_seconds=keyframe_interval_seconds,
+            include_ocr=_tobool(include_ocr),
+            include_ui_context=_tobool(include_ui_context),
+            include_event_timeline=_tobool(include_event_timeline),
+            output_format=str(output_format or "debug_report").strip().lower(),
+        )
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"AnalyzeRecording error: {e}"
+
+
 # ======================== ANNOTATED SNAPSHOT ===============================
 
 
@@ -3024,6 +4634,9 @@ def UIClick(
     err = _check_win32("UIClick")
     if err:
         return err
+    paused = _check_handoff_pause("UIClick")
+    if paused:
+        return paused
     try:
         search_result = desktop.find_ui_elements_with_context(
             query=query,
@@ -3576,6 +5189,9 @@ def UIAct(
     err = _check_win32("UIAct")
     if err:
         return err
+    paused = _check_handoff_pause("UIAct")
+    if paused:
+        return paused
     try:
         payload = _run_ui_action(
             query=query,
@@ -3602,6 +5218,125 @@ def UIAct(
         return json.dumps(payload, indent=2)
     except Exception as e:
         return f"UIAct error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ComputerUseStep",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ComputerUseStep(
+    goal: str,
+    window_title: str = "",
+    target_query: str = "",
+    action: str = "auto",
+    text: str = "",
+    match_mode: str = "auto",
+    include_text: bool | str = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    confirm_risky: bool | str = False,
+    dry_run: bool | str = False,
+    session_id: str = "",
+) -> str:
+    """Execute one high-level Observe -> Plan -> Act -> Verify desktop step.
+
+    This tool wraps semantic target search, risk gating, bounded action, and
+    post-action verification in a single structured response.
+    """
+    err = _check_win32("ComputerUseStep")
+    if err:
+        return err
+    paused = _check_handoff_pause("ComputerUseStep")
+    if paused:
+        return paused
+    try:
+        payload = computer_use.computer_use_step(
+            goal=goal,
+            window_title=window_title,
+            target_query=target_query,
+            action=action,
+            text=text,
+            match_mode=match_mode,
+            include_text=_tobool(include_text),
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            confirm_risky=_tobool(confirm_risky),
+            dry_run=_tobool(dry_run),
+            session_id=session_id.strip() or None,
+        )
+        payload["coordinate_spaces"] = _ui_coordinate_spaces()
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"ComputerUseStep error: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="ComputerUseTask",
+        destructiveHint=False,
+        openWorldHint=False,
+    )
+)
+def ComputerUseTask(
+    goal: str,
+    window_title: str = "",
+    target_query: str = "",
+    action: str = "auto",
+    text: str = "",
+    match_mode: str = "auto",
+    include_text: bool | str = False,
+    max_elements: int = 100,
+    min_width: int = 4,
+    min_height: int = 4,
+    confirm_risky: bool | str = False,
+    dry_run: bool | str = False,
+    max_steps: int = 5,
+    max_failures: int = 2,
+    stop_on_first_success: bool | str = True,
+    step_queries_csv: str = "",
+    session_id: str = "",
+) -> str:
+    """Run a bounded multi-step computer-use loop with shared session trace.
+
+    Executes up to max_steps calls to ComputerUseStep-style logic and returns
+    aggregated step-by-step evidence.
+    """
+    err = _check_win32("ComputerUseTask")
+    if err:
+        return err
+    paused = _check_handoff_pause("ComputerUseTask")
+    if paused:
+        return paused
+    try:
+        step_queries = [item.strip() for item in step_queries_csv.split(",") if item.strip()]
+        payload = computer_use.computer_use_task(
+            goal=goal,
+            window_title=window_title,
+            target_query=target_query,
+            action=action,
+            text=text,
+            match_mode=match_mode,
+            include_text=_tobool(include_text),
+            max_elements=max_elements,
+            min_width=min_width,
+            min_height=min_height,
+            confirm_risky=_tobool(confirm_risky),
+            dry_run=_tobool(dry_run),
+            max_steps=max_steps,
+            max_failures=max_failures,
+            stop_on_first_success=_tobool(stop_on_first_success),
+            step_queries=step_queries,
+            session_id=session_id.strip() or None,
+        )
+        payload["coordinate_spaces"] = _ui_coordinate_spaces()
+        return json.dumps(payload, indent=2)
+    except Exception as e:
+        return f"ComputerUseTask error: {e}"
 
 
 @mcp.tool(
@@ -4164,7 +5899,7 @@ def _run_mcp_server(
 @click.option(
     "--profile",
     default="default",
-    type=click.Choice(["default", "chatgpt", "copilot", "excel", "claude"]),
+    type=click.Choice(PROFILE_CHOICES),
     help="Tool and instruction profile",
 )
 @click.option(
@@ -4459,6 +6194,19 @@ def export_roblox_studio_harness(output_dir: str, harness_url: str) -> None:
     click.echo("[OK] Wrote Roblox Studio harness files:")
     for path in written:
         click.echo(f"  {path}")
+
+
+@cli.group(name="sessions")
+def sessions_cli():
+    """Helpers for local session artifacts and reports."""
+
+
+@sessions_cli.command(name="render")
+@click.argument("session_id")
+def render_session_report_command(session_id: str) -> None:
+    """Render a local HTML report for a session id."""
+    payload = session_report.render_session_report(session_id)
+    click.echo(f"[OK] Rendered report: {payload['report_path']}")
 
 
 @cli.command()

@@ -1,0 +1,8 @@
+name = "codex-cli"
+description = "Codex CLI profile using copilot baseline."
+
+extends = "copilot"
+
+enabled_tools = []
+disabled_tools = ["TaskCreate", "ServiceStop", "RegWrite"]
+require_confirmation = ["ComputerUseStep", "ComputerUseTask"]

@@ -1,0 +1,8 @@
+name = "local-debug"
+description = "Developer local-debug profile with all tiers enabled."
+
+extends = "default"
+
+enabled_tools = ["Shell", "FileRead", "FileWrite", "TaskCreate", "ServiceStop", "RegWrite"]
+disabled_tools = []
+require_confirmation = []

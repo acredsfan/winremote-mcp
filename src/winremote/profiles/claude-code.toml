@@ -1,0 +1,8 @@
+name = "claude-code"
+description = "Claude Code profile mirroring safe chatgpt defaults."
+
+extends = "claude"
+
+enabled_tools = []
+disabled_tools = []
+require_confirmation = ["ComputerUseStep", "ComputerUseTask"]
