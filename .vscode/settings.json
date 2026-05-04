@@ -1,4 +1,12 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
-    "chat.mcp.autostart": true
+    "chat.mcp.autostart": true,
+    "isort.enable": false,
+    "[python]": {
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+        }
+    }
 }
