@@ -103,6 +103,8 @@ class ServerManager:
         self._start_time: float | None = None
         self._port_conflict_pid: int | None = None
         self._port_conflict_name: str | None = None
+        self._runtime_disable_ssl = False
+        self._ssl_retry_attempted = False
 
         # Background threads (daemon — exit with main process)
         self._poll_thread: threading.Thread | None = None
@@ -147,7 +149,7 @@ class ServerManager:
     @property
     def base_url(self) -> str:
         s = self.settings
-        scheme = "https" if s.ssl_certfile else "http"
+        scheme = "https" if (s.ssl_certfile and not self._runtime_disable_ssl) else "http"
         return f"{scheme}://{s.host}:{s.port}"
 
     # ------------------------------------------------------------------
@@ -161,6 +163,8 @@ class ServerManager:
                 return False
             self._port_conflict_pid = None
             self._port_conflict_name = None
+            self._runtime_disable_ssl = False
+            self._ssl_retry_attempted = False
             self._set_state(ServerState.STARTING, "Launching server process")
 
         conflict = self._find_port_conflict()
@@ -175,21 +179,10 @@ class ServerManager:
                 )
             return False
 
-        cmd = self._build_command()
-        kwargs: dict = {
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "text": True,
-            "bufsize": 1,
-        }
-        if sys.platform == "win32":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-        try:
-            proc = subprocess.Popen(cmd, **kwargs)
-        except Exception as exc:
+        proc, err = self._spawn_process()
+        if proc is None:
             with self._lock:
-                self._set_state(ServerState.ERROR, f"Failed to launch: {exc}")
+                self._set_state(ServerState.ERROR, f"Failed to launch: {err}")
             return False
 
         with self._lock:
@@ -197,16 +190,9 @@ class ServerManager:
             self._start_time = time.monotonic()
             self._stop_event.clear()
 
-        self._stdout_thread = threading.Thread(
-            target=self._read_stream, args=(proc.stdout, False), daemon=True
-        )
-        self._stderr_thread = threading.Thread(
-            target=self._read_stream, args=(proc.stderr, True), daemon=True
-        )
+        self._start_stream_threads(proc)
         self._poll_thread = threading.Thread(target=self._poll_health, daemon=True)
 
-        self._stdout_thread.start()
-        self._stderr_thread.start()
         self._poll_thread.start()
         return True
 
@@ -293,9 +279,9 @@ class ServerManager:
             cmd += ["--config", str(s.config_path)]
         if s.auth_key:
             cmd += ["--auth-key", s.auth_key]
-        if s.ssl_certfile:
+        if s.ssl_certfile and not self._runtime_disable_ssl:
             cmd += ["--ssl-certfile", s.ssl_certfile]
-        if s.ssl_keyfile:
+        if s.ssl_keyfile and not self._runtime_disable_ssl:
             cmd += ["--ssl-keyfile", s.ssl_keyfile]
         if s.enable_tier3:
             cmd.append("--enable-tier3")
@@ -321,6 +307,73 @@ class ServerManager:
                     self.on_log_line(stripped, is_stderr)
         except Exception:
             pass
+
+    def _spawn_process(self) -> tuple[subprocess.Popen | None, str | None]:
+        cmd = self._build_command()
+        kwargs: dict = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "bufsize": 1,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            return subprocess.Popen(cmd, **kwargs), None
+        except Exception as exc:
+            return None, str(exc)
+
+    def _start_stream_threads(self, proc: subprocess.Popen) -> None:
+        self._stdout_thread = threading.Thread(
+            target=self._read_stream, args=(proc.stdout, False), daemon=True
+        )
+        self._stderr_thread = threading.Thread(
+            target=self._read_stream, args=(proc.stderr, True), daemon=True
+        )
+        self._stdout_thread.start()
+        self._stderr_thread.start()
+
+    def _retry_start_without_ssl(self) -> bool:
+        """Attempt a one-time restart without SSL when HTTPS health checks fail."""
+        with self._lock:
+            has_ssl = bool(self.settings.ssl_certfile and self.settings.ssl_keyfile)
+            if not has_ssl or self._runtime_disable_ssl or self._ssl_retry_attempted:
+                return False
+            proc = self._process
+            self._ssl_retry_attempted = True
+            self._runtime_disable_ssl = True
+            self._set_state(
+                ServerState.STARTING,
+                "HTTPS health check failed; retrying launch without SSL",
+            )
+
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+
+        new_proc, err = self._spawn_process()
+        if new_proc is None:
+            with self._lock:
+                self._start_time = None
+                self._set_state(
+                    ServerState.ERROR,
+                    f"SSL fallback launch failed: {err}",
+                )
+            return False
+
+        with self._lock:
+            self._process = new_proc
+            self._start_time = time.monotonic()
+
+        self._start_stream_threads(new_proc)
+        return True
 
     def _poll_health(self) -> None:
         """Poll /health until stop_event is set or process exits."""
@@ -352,6 +405,11 @@ class ServerManager:
 
                 if self._state == ServerState.STARTING:
                     if elapsed > self.start_timeout:
+                        if self._retry_start_without_ssl():
+                            consecutive_fail = 0
+                            start_ts = time.monotonic()
+                            self._stop_event.wait(timeout=self.poll_interval)
+                            continue
                         with self._lock:
                             self._set_state(
                                 ServerState.DEGRADED,
@@ -372,7 +430,7 @@ class ServerManager:
             req.add_header("Authorization", f"Bearer {s.auth_key}")
 
         try:
-            if s.ssl_certfile:
+            if s.ssl_certfile and not self._runtime_disable_ssl:
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE

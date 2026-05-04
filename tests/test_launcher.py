@@ -354,3 +354,57 @@ def test_stop_conflicting_process_access_denied():
 
     assert ok is False
     assert "Access denied" in msg
+
+
+def test_build_command_omits_ssl_when_runtime_disabled():
+    s = _settings(
+        ssl_certfile="C:/tmp/cert.pem",
+        ssl_keyfile="C:/tmp/key.pem",
+    )
+    mgr = _make_manager(settings=s)
+
+    cmd_with_ssl = mgr._build_command()
+    assert "--ssl-certfile" in cmd_with_ssl
+    assert "--ssl-keyfile" in cmd_with_ssl
+
+    mgr._runtime_disable_ssl = True
+    cmd_without_ssl = mgr._build_command()
+    assert "--ssl-certfile" not in cmd_without_ssl
+    assert "--ssl-keyfile" not in cmd_without_ssl
+
+
+def test_retry_start_without_ssl_relaunches_once():
+    s = _settings(
+        ssl_certfile="C:/tmp/cert.pem",
+        ssl_keyfile="C:/tmp/key.pem",
+    )
+    mgr = _make_manager(settings=s)
+
+    old_proc = MagicMock()
+    old_proc.wait.return_value = 0
+    old_proc.stdout = iter([])
+    old_proc.stderr = iter([])
+    mgr._process = old_proc
+
+    new_proc = MagicMock()
+    new_proc.stdout = iter([])
+    new_proc.stderr = iter([])
+
+    with patch.object(mgr, "_spawn_process", return_value=(new_proc, None)) as spawn_mock, patch.object(
+        mgr, "_start_stream_threads"
+    ) as stream_mock:
+        ok = mgr._retry_start_without_ssl()
+
+    assert ok is True
+    assert mgr._runtime_disable_ssl is True
+    assert mgr._ssl_retry_attempted is True
+    assert mgr._process is new_proc
+    old_proc.terminate.assert_called_once()
+    spawn_mock.assert_called_once()
+    stream_mock.assert_called_once_with(new_proc)
+
+    # One-shot guard: second retry is blocked.
+    with patch.object(mgr, "_spawn_process") as spawn_mock_again:
+        ok_again = mgr._retry_start_without_ssl()
+    assert ok_again is False
+    spawn_mock_again.assert_not_called()

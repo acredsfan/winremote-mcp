@@ -146,7 +146,7 @@ Edit your `claude_desktop_config.json`:
   "mcpServers": {
     "winremote": {
       "type": "streamable-http",
-      "url": "http://192.168.1.100:8090/mcp",
+      "url": "http://localhost:8090/mcp",
       "headers": {
         "Authorization": "Bearer your-secret-key"
       }
