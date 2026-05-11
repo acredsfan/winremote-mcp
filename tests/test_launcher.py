@@ -45,7 +45,7 @@ def _make_manager(settings=None, **manager_kwargs) -> ServerManager:
 # ---------------------------------------------------------------------------
 
 def test_valid_profiles():
-    assert set(VALID_PROFILES) == {"default", "chatgpt", "copilot", "claude", "excel"}
+    assert set(VALID_PROFILES) == {"default", "chatgpt", "copilot", "copilot-cli", "claude", "excel"}
 
 
 def test_profile_descriptions_cover_all_profiles():
@@ -107,6 +107,19 @@ def test_command_includes_auth_key():
     cmd = mgr._build_command()
     assert "--auth-key" in cmd
     assert "secret123" in cmd
+
+
+def test_command_includes_oauth_client_credentials():
+    s = _settings(
+        oauth_client_id="copilot-cli",
+        oauth_client_secret="client-secret",
+    )
+    mgr = _make_manager(settings=s)
+    cmd = mgr._build_command()
+    assert "--oauth-client-id" in cmd
+    assert "copilot-cli" in cmd
+    assert "--oauth-client-secret" in cmd
+    assert "client-secret" in cmd
 
 
 def test_command_includes_enable_tier3():

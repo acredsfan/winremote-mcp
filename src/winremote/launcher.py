@@ -40,12 +40,13 @@ _STARTABLE = {ServerState.STOPPED, ServerState.ERROR}
 # Settings
 # ---------------------------------------------------------------------------
 
-VALID_PROFILES = ("default", "chatgpt", "copilot", "claude", "excel")
+VALID_PROFILES = ("default", "chatgpt", "copilot", "copilot-cli", "claude", "excel")
 
 PROFILE_DESCRIPTIONS: dict[str, str] = {
     "default": "Tier 1 + Tier 2 tools (all observation + interaction)",
     "chatgpt": "Full ChatGPT set — observation, UI, Shell, File I/O, Roblox",
-    "copilot": "Copilot set — ChatGPT minus Shell/File (VS Code provides those)",
+    "copilot": "Copilot Chat set — ChatGPT minus Shell/File (VS Code provides those)",
+    "copilot-cli": "Copilot CLI set — Copilot profile with conservative system actions",
     "claude": "Claude set — same as ChatGPT",
     "excel": "Excel set — observation, UI interaction, clipboard, shell",
 }
@@ -60,6 +61,8 @@ class ServerSettings:
     host: str = "127.0.0.1"
     port: int = 8090
     auth_key: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
     ssl_certfile: str | None = None
     ssl_keyfile: str | None = None
     transport: str = "streamable-http"
@@ -279,6 +282,10 @@ class ServerManager:
             cmd += ["--config", str(s.config_path)]
         if s.auth_key:
             cmd += ["--auth-key", s.auth_key]
+        if s.oauth_client_id:
+            cmd += ["--oauth-client-id", s.oauth_client_id]
+        if s.oauth_client_secret:
+            cmd += ["--oauth-client-secret", s.oauth_client_secret]
         if s.ssl_certfile and not self._runtime_disable_ssl:
             cmd += ["--ssl-certfile", s.ssl_certfile]
         if s.ssl_keyfile and not self._runtime_disable_ssl:

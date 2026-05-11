@@ -165,7 +165,7 @@ def load_config(path: Path | None) -> WinRemoteConfig:
         cfg.server.profile = _choice_string(
             server["profile"],
             "server.profile",
-            allowed={"default", "chatgpt", "copilot", "excel", "claude"},
+            allowed={"default", "chatgpt", "copilot", "copilot-cli", "excel", "claude"},
         )
 
     if "ip_allowlist" in security:

@@ -463,6 +463,17 @@ class TestAuthMiddlewareWithOAuth:
         resp = client.get("/", headers={"Authorization": "Bearer wrong"})
         assert resp.status_code == 401
 
+    def test_mcp_prefixed_oauth_metadata_is_public(self):
+        async def metadata(request):
+            return JSONResponse({"ok": True})
+
+        app = Starlette(routes=[Route("/mcp/.well-known/oauth-authorization-server", metadata)])
+        app.add_middleware(AuthKeyMiddleware, auth_key="secret")
+        client = TestClient(app)
+
+        resp = client.get("/mcp/.well-known/oauth-authorization-server")
+        assert resp.status_code == 200
+
 
 class TestOAuthOnlyMiddleware:
     def _make_app(self, oauth_validator):
@@ -490,6 +501,17 @@ class TestOAuthOnlyMiddleware:
         client = TestClient(app)
         resp = client.get("/")
         assert resp.status_code == 401
+
+    def test_mcp_prefixed_oauth_token_route_is_public(self):
+        async def token(request):
+            return JSONResponse({"ok": True})
+
+        app = Starlette(routes=[Route("/mcp/oauth/token", token, methods=["POST"])])
+        app.add_middleware(OAuthOnlyMiddleware, oauth_validator=lambda t: False)
+        client = TestClient(app)
+
+        resp = client.post("/mcp/oauth/token")
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------

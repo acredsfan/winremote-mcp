@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 # Paths that never require authentication
-_PUBLIC_PATHS = frozenset(
+_BASE_PUBLIC_PATHS = frozenset(
     {
         "/health",
         "/.well-known/oauth-authorization-server",
@@ -16,6 +16,8 @@ _PUBLIC_PATHS = frozenset(
         "/oauth/token",
     }
 )
+
+_PUBLIC_PATHS = frozenset(_BASE_PUBLIC_PATHS | {f"/mcp{path}" for path in _BASE_PUBLIC_PATHS if path != "/health"})
 
 
 class AuthKeyMiddleware(BaseHTTPMiddleware):

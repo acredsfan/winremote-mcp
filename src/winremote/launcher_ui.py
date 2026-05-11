@@ -24,6 +24,7 @@ import tkinter as tk
 import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
 import tkinter.ttk as ttk
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,8 @@ class LauncherSettings:
     server_host: str = "127.0.0.1"
     server_port: int = 8090
     auth_key: str = ""
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
     ssl_certfile: str = ""
     ssl_keyfile: str = ""
     transport: str = "streamable-http"
@@ -78,6 +81,7 @@ class LauncherSettings:
     profile_default_enabled: bool = True
     profile_chatgpt_enabled: bool = True
     profile_copilot_enabled: bool = True
+    profile_copilot_cli_enabled: bool = True
     profile_claude_enabled: bool = True
     profile_excel_enabled: bool = True
 
@@ -196,6 +200,7 @@ _PROFILE_ENABLE_FIELDS: dict[str, str] = {
     "default": "profile_default_enabled",
     "chatgpt": "profile_chatgpt_enabled",
     "copilot": "profile_copilot_enabled",
+    "copilot-cli": "profile_copilot_cli_enabled",
     "claude": "profile_claude_enabled",
     "excel": "profile_excel_enabled",
 }
@@ -689,6 +694,23 @@ class DashboardWindow:
         ttk.Button(tun_btn, text="Start Tunnel", command=self._app.start_tunnel).pack(side=tk.LEFT, padx=2)
         ttk.Button(tun_btn, text="Stop Tunnel", command=self._app.stop_tunnel).pack(side=tk.LEFT, padx=2)
 
+        # Roblox Studio harness card
+        harness_lf = ttk.LabelFrame(parent, text="Roblox Studio Harness")
+        harness_lf.pack(fill=tk.X, padx=8, pady=(8, 4))
+
+        self._harness_state_var = tk.StringVar(value="–")
+        self._harness_url_var = tk.StringVar(value=self._app.roblox_studio_harness_url())
+        self._harness_pid_var = tk.StringVar(value="–")
+
+        _grid_row(harness_lf, 0, "State:", self._harness_state_var)
+        _grid_row(harness_lf, 1, "URL:", self._harness_url_var)
+        _grid_row(harness_lf, 2, "Managed PID:", self._harness_pid_var)
+
+        harness_btn = ttk.Frame(parent)
+        harness_btn.pack(fill=tk.X, padx=8, pady=2)
+        ttk.Button(harness_btn, text="Launch Harness", command=self._app.start_roblox_studio_harness).pack(side=tk.LEFT, padx=2)
+        ttk.Button(harness_btn, text="Stop Harness", command=self._app.stop_roblox_studio_harness).pack(side=tk.LEFT, padx=2)
+
     def _build_events_tab(self, parent: ttk.Frame) -> None:
         toolbar = ttk.Frame(parent)
         toolbar.pack(fill=tk.X, padx=8, pady=4)
@@ -810,12 +832,15 @@ class DashboardWindow:
         self._ctrl_vars: dict[str, tk.Variable] = {}
         row = 0
 
-        def add_text(label: str, key: str, value: str, width: int = 40) -> None:
+        def add_text(label: str, key: str, value: str, width: int = 40, *, show: str | None = None) -> None:
             nonlocal row
             var = tk.StringVar(value=value)
             self._ctrl_vars[key] = var
             ttk.Label(body, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=3)
-            ttk.Entry(body, textvariable=var, width=width).grid(row=row, column=1, sticky="ew", padx=4, pady=3)
+            entry = ttk.Entry(body, textvariable=var, width=width)
+            if show is not None:
+                entry.configure(show=show)
+            entry.grid(row=row, column=1, sticky="ew", padx=4, pady=3)
             row += 1
 
         def add_bool(label: str, key: str, value: bool) -> None:
@@ -845,6 +870,8 @@ class DashboardWindow:
         add_text("Host", "server_host", s.server_host)
         add_text("Port", "server_port", str(s.server_port), width=10)
         add_text("Auth key", "auth_key", s.auth_key)
+        add_text("OAuth client ID", "oauth_client_id", s.oauth_client_id)
+        add_text("OAuth client secret", "oauth_client_secret", s.oauth_client_secret, show="*")
         add_file_picker("SSL certfile", "ssl_certfile", s.ssl_certfile)
         add_file_picker("SSL keyfile", "ssl_keyfile", s.ssl_keyfile)
 
@@ -1025,6 +1052,8 @@ class DashboardWindow:
         except (ValueError, tk.TclError):
             s.server_port = 8090
         s.auth_key = vars_["auth_key"].get()
+        s.oauth_client_id = vars_["oauth_client_id"].get()
+        s.oauth_client_secret = vars_["oauth_client_secret"].get()
         s.ssl_certfile = vars_["ssl_certfile"].get()
         s.ssl_keyfile = vars_["ssl_keyfile"].get()
         s.cloudflared_path = vars_["cloudflared_path"].get().strip()
@@ -1100,6 +1129,13 @@ class DashboardWindow:
         self._tun_state_var.set(tun.state.value)
         self._tun_url_var.set(tun.public_url or "–")
         self._tun_uptime_var.set(_fmt_uptime(tun.uptime_seconds))
+
+        # Roblox Studio harness
+        if hasattr(self, "_harness_state_var"):
+            harness_proc = app._managed_harness_process()
+            self._harness_state_var.set(app.describe_harness_status())
+            self._harness_url_var.set(app.roblox_studio_harness_url())
+            self._harness_pid_var.set(str(harness_proc.pid) if harness_proc is not None else "–")
 
         self._win.after(2000, self._refresh_dashboard)
 
@@ -1246,7 +1282,7 @@ class SettingsDialog:
                    "config_path", s.server_config_path, browse_file=True)
         row = [1]
 
-        def add(label: str, key: str, val: Any, is_bool: bool = False) -> None:
+        def add(label: str, key: str, val: Any, is_bool: bool = False, *, show: str | None = None) -> None:
             if is_bool:
                 var = tk.BooleanVar(value=bool(val))
             else:
@@ -1259,7 +1295,10 @@ class SettingsDialog:
                 if key == "enable_tier3" and not self._is_admin:
                     cb.configure(state=tk.DISABLED)
             else:
-                ttk.Entry(parent, textvariable=var, width=30).grid(row=row[0], column=1, sticky="ew", padx=4)
+                entry = ttk.Entry(parent, textvariable=var, width=30)
+                if show is not None:
+                    entry.configure(show=show)
+                entry.grid(row=row[0], column=1, sticky="ew", padx=4)
             row[0] += 1
 
         # Profile combobox
@@ -1273,6 +1312,8 @@ class SettingsDialog:
         add("Host:", "server_host", s.server_host)
         add("Port:", "server_port", s.server_port)
         add("Auth key:", "auth_key", s.auth_key)
+        add("OAuth client ID:", "oauth_client_id", s.oauth_client_id)
+        add("OAuth client secret:", "oauth_client_secret", s.oauth_client_secret, show="*")
         add("SSL certfile:", "ssl_certfile", s.ssl_certfile)
         add("SSL keyfile:", "ssl_keyfile", s.ssl_keyfile)
         add("Transport (stdio/streamable-http):", "transport", s.transport)
@@ -1345,6 +1386,8 @@ class SettingsDialog:
         except ValueError:
             pass
         s.auth_key = v["auth_key"].get()
+        s.oauth_client_id = v["oauth_client_id"].get()
+        s.oauth_client_secret = v["oauth_client_secret"].get()
         s.ssl_certfile = v["ssl_certfile"].get()
         s.ssl_keyfile = v["ssl_keyfile"].get()
         s.transport = v["transport"].get().strip() or "streamable-http"
@@ -1408,6 +1451,7 @@ class TrayApp:
 
         self.history = HistoryStore()
         self._log_buffer = _LogBuffer(max_lines=self.settings.log_max_lines)
+        self._harness_process: subprocess.Popen | None = None
 
         # Build managers from current settings
         self.server_manager = ServerManager(
@@ -1586,6 +1630,85 @@ class TrayApp:
         threading.Thread(target=self.tunnel_manager.stop, daemon=True).start()
 
     # ------------------------------------------------------------------
+    # Roblox Studio harness actions
+    # ------------------------------------------------------------------
+
+    def roblox_studio_harness_url(self) -> str:
+        return "http://127.0.0.1:51234"
+
+    def _managed_harness_process(self) -> subprocess.Popen | None:
+        proc = self._harness_process
+        if proc is not None and proc.poll() is not None:
+            self._harness_process = None
+            return None
+        return proc
+
+    def _harness_running_elsewhere(self) -> bool:
+        try:
+            req = urllib.request.Request(f"{self.roblox_studio_harness_url()}/health")
+            with urllib.request.urlopen(req, timeout=0.25):
+                return True
+        except Exception:
+            return False
+
+    def describe_harness_status(self) -> str:
+        proc = self._managed_harness_process()
+        if proc is not None:
+            return f"Running (managed PID {proc.pid})"
+        if self._harness_running_elsewhere():
+            return "Running (external)"
+        return "Stopped"
+
+    def start_roblox_studio_harness(self) -> None:
+        if self._managed_harness_process() is not None:
+            self._ui_queue.put(("notify", "Roblox Studio harness is already running."))
+            return
+        if self._harness_running_elsewhere():
+            self._ui_queue.put(("notify", "Roblox Studio harness already appears to be running."))
+            return
+
+        cmd = [sys.executable, "-m", "winremote", "roblox-studio", "serve-harness"]
+        kwargs: dict[str, Any] = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+        try:
+            proc = subprocess.Popen(cmd, **kwargs)
+        except Exception as exc:
+            self._ui_queue.put(("notify", f"Failed to launch Roblox Studio harness: {exc}"))
+            return
+
+        self._harness_process = proc
+        self.history.append(HistoryEvent(EventType.TOOL_CALL, data={"action": "start_roblox_studio_harness"}))
+        self._rebuild_tray_menu()
+        self._ui_queue.put(("notify", f"Roblox Studio harness started at {self.roblox_studio_harness_url()}."))
+
+    def stop_roblox_studio_harness(self) -> None:
+        proc = self._managed_harness_process()
+        if proc is None:
+            if self._harness_running_elsewhere():
+                self._ui_queue.put(("notify", "Roblox Studio harness is running externally and cannot be stopped from the tray."))
+            else:
+                self._ui_queue.put(("notify", "Roblox Studio harness is not running."))
+            return
+
+        def _worker() -> None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=3)
+            finally:
+                self._harness_process = None
+                self.history.append(HistoryEvent(EventType.TOOL_CALL, data={"action": "stop_roblox_studio_harness"}))
+                self._rebuild_tray_menu()
+                self._ui_queue.put(("notify", "Roblox Studio harness stopped."))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    # ------------------------------------------------------------------
     # Settings
     # ------------------------------------------------------------------
 
@@ -1627,6 +1750,8 @@ class TrayApp:
             host=s.server_host,
             port=s.server_port,
             auth_key=s.auth_key or None,
+            oauth_client_id=s.oauth_client_id or None,
+            oauth_client_secret=s.oauth_client_secret or None,
             ssl_certfile=s.ssl_certfile or None,
             ssl_keyfile=s.ssl_keyfile or None,
             transport=(s.transport or "streamable-http"),
@@ -1825,6 +1950,14 @@ class TrayApp:
             tunnel_items.append(TrayMenu.SEPARATOR)
             tunnel_items.append(TrayItem(f"URL: {tun.public_url}", None, enabled=False))
 
+        harness_running = self._managed_harness_process() is not None or self._harness_running_elsewhere()
+        harness_items = [
+            TrayItem("Launch Harness", lambda _: self.start_roblox_studio_harness(), enabled=not harness_running),
+            TrayItem("Stop Harness", lambda _: self.stop_roblox_studio_harness(), enabled=harness_running),
+            TrayMenu.SEPARATOR,
+            TrayItem(f"URL: {self.roblox_studio_harness_url()}", None, enabled=False),
+        ]
+
         return TrayMenu(
             TrayItem("winremote-mcp", None, enabled=False),
             TrayItem(
@@ -1835,6 +1968,7 @@ class TrayApp:
             TrayMenu.SEPARATOR,
             TrayItem("Server", TrayMenu(*server_items)),
             TrayItem("Tunnel", TrayMenu(*tunnel_items)),
+            TrayItem("Roblox Studio", TrayMenu(*harness_items)),
             TrayItem("Startup", TrayMenu(*startup_items)),
             TrayMenu.SEPARATOR,
             TrayItem("Dashboard", lambda _: self._ui_queue.put(("show_dashboard",))),

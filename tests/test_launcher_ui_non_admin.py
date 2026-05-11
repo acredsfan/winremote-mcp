@@ -165,6 +165,50 @@ def test_trayapp_describe_startup_status(monkeypatch):
     assert app.describe_startup_status() == "Enabled (server auto-start on startup: off)"
 
 
+def test_trayapp_starts_roblox_studio_harness(monkeypatch):
+    import winremote.launcher_ui as launcher_ui
+
+    class _FakeTk:
+        def withdraw(self):
+            return None
+
+        def title(self, _s):
+            return None
+
+    class _FakeHistory:
+        def append(self, _event):
+            return None
+
+    class _FakeProc:
+        pid = 4321
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return None
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(launcher_ui.tk, "Tk", _FakeTk)
+    monkeypatch.setattr(launcher_ui, "HistoryStore", lambda: _FakeHistory())
+    monkeypatch.setattr(launcher_ui, "load_launcher_settings", lambda: launcher_ui.LauncherSettings())
+    monkeypatch.setattr(launcher_ui, "save_launcher_settings", lambda _settings: None)
+    monkeypatch.setattr(launcher_ui, "_sync_windows_startup_registration", lambda _settings: (True, ""))
+    monkeypatch.setattr(launcher_ui.TrayApp, "_harness_running_elsewhere", lambda self: False)
+    monkeypatch.setattr(launcher_ui.subprocess, "Popen", lambda *args, **kwargs: _FakeProc())
+
+    app = launcher_ui.TrayApp()
+    app.start_roblox_studio_harness()
+
+    assert app._managed_harness_process() is not None
+    assert app.describe_harness_status() == "Running (managed PID 4321)"
+
+
 def test_settings_roundtrip_preserves_false_booleans(tmp_path: Path, monkeypatch):
     settings_file = tmp_path / "launcher_settings.toml"
 
@@ -190,7 +234,7 @@ def test_settings_roundtrip_preserves_false_booleans(tmp_path: Path, monkeypatch
 def test_enabled_profiles_defaults_all_enabled():
     s = LauncherSettings()
     enabled = _enabled_profiles(s)
-    assert set(enabled) == {"default", "chatgpt", "copilot", "claude", "excel"}
+    assert set(enabled) == {"default", "chatgpt", "copilot", "copilot-cli", "claude", "excel"}
 
 
 def test_disable_non_selected_profile():
@@ -218,6 +262,7 @@ def test_cannot_disable_last_enabled_profile():
         profile_default_enabled=True,
         profile_chatgpt_enabled=False,
         profile_copilot_enabled=False,
+        profile_copilot_cli_enabled=False,
         profile_claude_enabled=False,
         profile_excel_enabled=False,
     )

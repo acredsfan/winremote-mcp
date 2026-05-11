@@ -60,6 +60,18 @@ winremote-mcp copilot-launch
 
 That launcher starts the Roblox Studio harness automatically if it is not already healthy, then serves WinRemote to Copilot over stdio using the `copilot` profile. For the full VS Code Insiders setup, see [`docs/copilot-chat.md`](docs/copilot-chat.md).
 
+## GitHub Copilot CLI Profile
+
+For terminal-based GitHub Copilot CLI workflows, WinRemote includes a dedicated `copilot-cli` profile.
+
+Start it with:
+
+```bash
+winremote-mcp copilot-cli-launch
+```
+
+This launches WinRemote over stdio with the `copilot-cli` profile and does not auto-start the Roblox Studio harness. For full setup details, see [`docs/copilot-cli.md`](docs/copilot-cli.md).
+
 ## Roblox Studio Playtest Harness
 
 WinRemote can now pair its `RobloxStudio*` MCP tools with a local harness so ChatGPT or GitHub Copilot Chat can run Studio playtests, read structured state, reset characters, teleport to checkpoints, and run named tests without manual intervention.

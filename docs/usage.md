@@ -30,7 +30,7 @@ winremote-tray
 The tray launcher provides:
 
 - **Server lifecycle**: Start / Stop / Restart
-- **Profile control**: Switch between `default`, `chatgpt`, `copilot`, `claude`, and `excel`
+- **Profile control**: Switch between `default`, `chatgpt`, `copilot`, `copilot-cli`, `claude`, and `excel`
 - **Cloudflare tunnel control**: Start/stop local `cloudflared`, with URL/status visibility
 - **Monitoring**: Live status + persisted local event history
 - **Settings UI**: Configure host/port/auth/SSL/profile and tunnel paths without editing CLI args
@@ -123,6 +123,55 @@ This repository includes a workspace `.vscode/mcp.json` entry for Copilot Chat. 
 ```
 
 The `copilot-launch` command starts the `copilot` profile over stdio and auto-starts the Roblox Studio harness in the background if it is not already running.
+
+### GitHub Copilot CLI
+
+If you use `winremote-tray` and it is already auto-starting the server, Copilot CLI should connect to the running local server over **HTTP** — it does **not** need to launch another server process.
+
+Use the tray-managed setup like this:
+
+1. Start `winremote-tray`.
+2. Select or enable the `copilot-cli` profile in the tray/settings.
+3. If you intentionally enabled OAuth in the tray, set the matching `OAuth client ID` / `secret` there first.
+4. In Copilot CLI, add an MCP server with:
+  - **Unique name**: `winremote` or `winremoteCopilotCli`
+  - **Server Type**: `HTTP`
+  - **URL**: `http://127.0.0.1:8090/mcp`
+  - **Client ID**: leave blank unless you explicitly configured OAuth on WinRemote; if your wizard forces a non-empty value, use the same Client ID you set in the tray
+  - **Tools**: `*`
+  - **Authorization/Headers**: leave blank unless you turned on auth
+
+If you prefer Copilot CLI itself to start the server process, use the dedicated `copilot-cli` launcher command:
+
+```bash
+winremote-mcp copilot-cli-launch
+```
+
+What it does:
+
+- starts WinRemote over **stdio**
+- uses profile **`copilot-cli`**
+- does **not** auto-start the Roblox Studio harness
+
+If you want the harness from the GUI instead, open the tray dashboard and use the **Roblox Studio Harness** section on the Status tab, or the matching tray submenu.
+
+Use this MCP server entry in your Copilot CLI MCP config:
+
+```json
+{
+  "servers": {
+    "winremoteCopilotCli": {
+      "command": "python",
+      "args": ["-m", "winremote", "copilot-cli-launch"],
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}
+```
+
+If your Copilot CLI version uses a different config path or command to register MCP servers, keep the same `command` and `args` shown above and apply them through your version's MCP configuration flow.
 
 ### Claude Desktop
 

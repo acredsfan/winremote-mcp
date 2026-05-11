@@ -2,6 +2,8 @@
 
 WinRemote's `copilot` profile is tuned for GitHub Copilot Chat in **VS Code Insiders**.
 
+If you are using **GitHub Copilot CLI** in a terminal instead of Copilot Chat in VS Code, use the dedicated [Copilot CLI guide](copilot-cli.md) and the `copilot-cli` profile.
+
 Unlike the `chatgpt` profile, this profile assumes Copilot already has strong built-in workspace editing, search, and terminal tools. The WinRemote MCP server is therefore focused on the things Copilot cannot do natively inside the editor:
 
 - launch and focus desktop applications
@@ -103,4 +105,5 @@ For Roblox Studio work, the ideal loop is:
 
 - `--tools` and `--exclude-tools` still override the profile if you launch WinRemote manually.
 - `copilot-launch` is intended for **local stdio** use in VS Code Insiders.
+- For terminal-based Copilot CLI flows, use `copilot-cli-launch` (`--profile copilot-cli`).
 - If you want remote HTTP access or OAuth-based external connectors, use the `chatgpt` or `default` flows instead.

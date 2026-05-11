@@ -70,6 +70,7 @@ nav:
   - Installation: installation.md
   - ChatGPT: chatgpt.md
   - GitHub Copilot Chat: copilot-chat.md
+  - GitHub Copilot CLI: copilot-cli.md
   - Roblox Studio: roblox-studio.md
   - Usage: usage.md
   - API Reference: api.md

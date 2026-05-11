@@ -158,3 +158,16 @@ class TestRobloxStudioHarnessStore:
         run_server.assert_called_once()
         assert run_server.call_args.kwargs["transport"] == "stdio"
         assert run_server.call_args.kwargs["profile"] == "copilot"
+
+    def test_copilot_cli_launch_uses_copilot_cli_profile(self, monkeypatch):
+        import winremote.__main__ as mod
+
+        run_server = MagicMock()
+        monkeypatch.setattr(mod, "_run_mcp_server", run_server)
+
+        result = CliRunner().invoke(cli, ["copilot-cli-launch"])
+
+        assert result.exit_code == 0
+        run_server.assert_called_once()
+        assert run_server.call_args.kwargs["transport"] == "stdio"
+        assert run_server.call_args.kwargs["profile"] == "copilot-cli"

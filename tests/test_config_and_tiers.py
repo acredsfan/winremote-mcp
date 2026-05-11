@@ -322,6 +322,20 @@ profile = "claude"
     assert cfg.server.profile == "claude"
 
 
+def test_config_loader_accepts_copilot_cli_profile(tmp_path: Path):
+    cfg_file = tmp_path / "winremote.toml"
+    cfg_file.write_text(
+        """
+[server]
+profile = "copilot-cli"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(cfg_file)
+    assert cfg.server.profile == "copilot-cli"
+
+
 def test_invalid_profile_rejected():
     with pytest.raises(ValueError):
         normalize_profile_name("nope")

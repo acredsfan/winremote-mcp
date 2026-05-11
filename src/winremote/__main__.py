@@ -5807,7 +5807,13 @@ def _run_mcp_server(
             configured_client_secret=oauth_client_secret,
         )
         for path, (handler, methods) in routes.items():
+            # Primary OAuth endpoints (spec-compliant root paths)
             mcp.custom_route(path, methods=methods)(handler)
+
+            # Compatibility aliases for clients that incorrectly resolve OAuth
+            # discovery/token endpoints relative to /mcp.
+            prefixed_path = f"/mcp{path}"
+            mcp.custom_route(prefixed_path, methods=methods)(handler)
 
         oauth_validator = lambda tok: validate_oauth_token(oauth_store, tok)  # noqa: E731
 
@@ -5996,7 +6002,12 @@ def cli(
 @click.option("--harness-port", default=51234, type=int, help="Bind port for the local Roblox Studio harness")
 @click.option("--harness-stale-after", default=5.0, type=float, help="Seconds before a Studio client is treated as disconnected")
 @click.option("--harness-max-events", default=100, type=int, help="Maximum recent harness events to retain in memory")
-@click.option("--skip-harness", is_flag=True, default=False, help="Start only the Copilot MCP server and do not auto-launch the Roblox Studio harness")
+@click.option(
+    "--skip-harness",
+    is_flag=True,
+    default=False,
+    help="Start only the Copilot Chat MCP server and do not auto-launch the Roblox Studio harness",
+)
 def copilot_launch(
     harness_host: str,
     harness_port: int,
@@ -6004,7 +6015,10 @@ def copilot_launch(
     harness_max_events: int,
     skip_harness: bool,
 ) -> None:
-    """Launch the Copilot Chat stdio server and auto-start the Roblox harness if needed."""
+    """Launch the Copilot Chat stdio server and auto-start the Roblox harness if needed.
+
+    For GitHub Copilot CLI, use ``copilot-cli-launch`` instead.
+    """
     if not skip_harness:
         os.environ.setdefault("WINREMOTE_ROBLOX_STUDIO_HARNESS_URL", _harness_url(harness_host, harness_port))
         _ensure_copilot_harness_running(
@@ -6021,6 +6035,32 @@ def copilot_launch(
         reload=False,
         auth_key=None,
         profile="copilot",
+        enable_all=False,
+        enable_tier3=False,
+        disable_tier2=False,
+        selected_tools=[],
+        excluded_tools=[],
+        allowlist_entries=[],
+        ssl_certfile=None,
+        ssl_keyfile=None,
+        oauth_client_id=None,
+        oauth_client_secret=None,
+    )
+
+
+@cli.command(name="copilot-cli-launch")
+def copilot_cli_launch() -> None:
+    """Launch the GitHub Copilot CLI stdio server using the ``copilot-cli`` profile.
+
+    This command does not auto-start the Roblox Studio harness.
+    """
+    _run_mcp_server(
+        transport="stdio",
+        host="127.0.0.1",
+        port=8090,
+        reload=False,
+        auth_key=None,
+        profile="copilot-cli",
         enable_all=False,
         enable_tier3=False,
         disable_tier2=False,

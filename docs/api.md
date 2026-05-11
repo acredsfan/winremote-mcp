@@ -132,4 +132,5 @@ For setup and operational examples, see:
 
 - `docs/usage.md`
 - `docs/copilot-chat.md`
+- `docs/copilot-cli.md`
 - `docs/chatgpt.md`

@@ -95,6 +95,8 @@ If you want to use WinRemote with ChatGPT full-MCP connectors, see the dedicated
 
 If you want to use WinRemote with GitHub Copilot Chat in VS Code Insiders, see the dedicated [GitHub Copilot Chat guide](copilot-chat.md).
 
+If you want to use WinRemote with GitHub Copilot CLI in a terminal workflow, see the dedicated [GitHub Copilot CLI guide](copilot-cli.md).
+
 For AI developers, see our pre-built configurations:
 - [Claude Desktop Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/claude)
 - [GitHub Copilot Chat Integration](https://github.com/dddabtc/winremote-mcp/tree/master/skill/copilot)
