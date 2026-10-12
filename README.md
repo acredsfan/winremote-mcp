@@ -1,5 +1,9 @@
 # WinRemote MCP — Run MCP Servers Remotely on Windows
 
+Contributor recovery: [agent workflow](AGENTS.md), [dated project state](docs/project-state.md)
+and [decisions/lessons](docs/decisions/README.md). Verify relevant claims against
+current sources; this is a manual Git-backed workflow.
+
 [![PyPI version](https://img.shields.io/pypi/v/winremote-mcp)](https://pypi.org/project/winremote-mcp/)
 [![Python](https://img.shields.io/pypi/pyversions/winremote-mcp)](https://pypi.org/project/winremote-mcp/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
